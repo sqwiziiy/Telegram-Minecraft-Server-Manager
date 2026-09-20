@@ -46,6 +46,7 @@ class ServerProcessManager:
         self.server_dir = Path(SERVER_DIR).expanduser().resolve()
         self.pid_file = Path(SERVER_PID_FILE).expanduser().resolve()
         self.output_log = Path(SERVER_OUTPUT_LOG).expanduser().resolve()
+        self.start_command = SERVER_START_COMMAND
 
     def _build_argv(self) -> list[str]:
         argv = shlex.split(self.start_command)
