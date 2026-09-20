@@ -1,115 +1,136 @@
 import asyncio
+import html
 import logging
-import subprocess
 
 import psutil
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from config import SYSTEMD_SERVICE_NAME
 from keyboards.inline import server_action_confirm_keyboard, system_keyboard
 from services.backup import create_backup
+from services.server_process import server_process_manager
 
 router = Router()
 logger = logging.getLogger(__name__)
 
 
 def _collect_sys_info() -> dict:
-    cpu = psutil.cpu_percent(interval=1)
+    cpu = psutil.cpu_percent(interval=0.3)
     ram = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     return {"cpu": cpu, "ram": ram, "disk": disk}
 
 
-def _format_sys_text(info: dict) -> str:
+def _format_uptime(seconds: int) -> str:
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}д")
+    if hours:
+        parts.append(f"{hours}ч")
+    parts.append(f"{minutes}м")
+    return " ".join(parts)
+
+
+async def _system_text() -> str:
+    info, server = await asyncio.gather(
+        asyncio.to_thread(_collect_sys_info),
+        server_process_manager.status(),
+    )
     ram = info["ram"]
     disk = info["disk"]
+
+    if server.running:
+        server_line = (
+            f"🟢 <b>Сервер:</b> работает · PID <code>{server.pid}</code> · "
+            f"{_format_uptime(server.uptime_seconds)} · {server.memory_mb:.0f} MB"
+        )
+    else:
+        server_line = "🔴 <b>Сервер:</b> остановлен"
+
     return (
-        "⚙️ <b>Системная информация</b>\n\n"
-        f"🖥  CPU:  <code>{info['cpu']:.1f}%</code>\n"
-        f"💾 RAM:  <code>{ram.used / 1024**3:.1f} / {ram.total / 1024**3:.1f} ГБ  "
-        f"({ram.percent}%)</code>\n"
-        f"💿 Диск: <code>{disk.used / 1024**3:.1f} / {disk.total / 1024**3:.1f} ГБ  "
-        f"({disk.percent}%)</code>"
+        "⚙️ <b>Панель сервера</b>\n\n"
+        f"{server_line}\n\n"
+        f"🖥 CPU: <code>{info['cpu']:.1f}%</code>\n"
+        f"💾 RAM: <code>{ram.used / 1024**3:.1f}/{ram.total / 1024**3:.1f} ГБ ({ram.percent}%)</code>\n"
+        f"💿 Диск: <code>{disk.used / 1024**3:.1f}/{disk.total / 1024**3:.1f} ГБ ({disk.percent}%)</code>"
     )
 
 
-async def _run_systemctl(action: str) -> str:
-    """Выполняет sudo systemctl {action} {SERVICE}. Возвращает текст результата."""
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(
-                ["sudo", "systemctl", action, SYSTEMD_SERVICE_NAME],
-                check=True,
-                timeout=60,
-                capture_output=True,
-                text=True,
-            ),
-        )
-        return "ok"
-    except subprocess.CalledProcessError as exc:
-        return f"❌ Ошибка:\n<code>{exc.stderr or exc}</code>"
-    except subprocess.TimeoutExpired:
-        return "❌ Превышено время ожидания."
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("systemctl %s unexpected error", action)
-        return f"❌ Неожиданная ошибка: {exc}"
-
-
-# ── Кнопка «⚙️ Система» ───────────────────────────────────────────────────────
-
-@router.message(F.text == "⚙️ Система")
-async def system_menu(message: Message) -> None:
-    loop = asyncio.get_running_loop()
-    info = await loop.run_in_executor(None, _collect_sys_info)
+async def _send_system_panel(message: Message) -> None:
     await message.answer(
-        _format_sys_text(info),
+        await _system_text(),
         parse_mode="HTML",
         reply_markup=system_keyboard(),
     )
 
 
+@router.message(F.text == "⚙️ Система")
+async def system_menu(message: Message) -> None:
+    await _send_system_panel(message)
+
+
 @router.message(Command("sys"))
 async def cmd_sys(message: Message) -> None:
-    loop = asyncio.get_running_loop()
-    info = await loop.run_in_executor(None, _collect_sys_info)
-    await message.answer(_format_sys_text(info), parse_mode="HTML")
+    await _send_system_panel(message)
 
 
-# ── Бэкап ─────────────────────────────────────────────────────────────────────
+@router.callback_query(F.data == "refresh_system")
+async def callback_refresh_system(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.edit_text(
+        await _system_text(),
+        parse_mode="HTML",
+        reply_markup=system_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "server_logs")
+async def callback_server_logs(callback: CallbackQuery) -> None:
+    await callback.answer()
+    output = await server_process_manager.tail_output(30)
+    if not output:
+        output = "(лог запуска пока пуст)"
+    await callback.message.answer(
+        "📜 <b>Последние строки manager-console.log</b>\n\n"
+        f"<pre>{html.escape(output[-3500:])}</pre>",
+        parse_mode="HTML",
+    )
+
 
 @router.callback_query(F.data == "create_backup")
 async def callback_create_backup(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.answer("⏳ Создаю бэкап, подождите…")
+    status = await callback.message.answer("⏳ Создаю бэкап мира…")
     result = await create_backup()
-    await callback.message.answer(result, parse_mode="HTML")
+    await status.edit_text(result, parse_mode="HTML")
 
-
-# ── Запрос подтверждения (старт / стоп / рестарт) ────────────────────────────
 
 _CONFIRM_TEXTS = {
-    "confirm_start":   ("▶️", "запустить",    "start"),
-    "confirm_stop":    ("⏹",  "остановить",   "stop"),
+    "confirm_start": ("▶️", "запустить", "start"),
+    "confirm_stop": ("⏹", "остановить", "stop"),
     "confirm_restart": ("🔁", "перезапустить", "restart"),
 }
+
 
 @router.callback_query(F.data.in_(set(_CONFIRM_TEXTS)))
 async def callback_confirm_action(callback: CallbackQuery) -> None:
     icon, verb, action = _CONFIRM_TEXTS[callback.data]
+    warning = (
+        "\nMinecraft получит команду <code>stop</code> через RCON перед остановкой."
+        if action in {"stop", "restart"}
+        else ""
+    )
     await callback.message.answer(
-        f"{icon} <b>Вы уверены, что хотите {verb} сервер?</b>\n"
-        "Все игроки будут отключены.",
+        f"{icon} <b>Точно {verb} сервер?</b>{warning}",
         parse_mode="HTML",
         reply_markup=server_action_confirm_keyboard(action),
     )
     await callback.answer()
 
-
-# ── Отмена ────────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.in_({"cancel_start", "cancel_stop", "cancel_restart"}))
 async def callback_cancel_action(callback: CallbackQuery) -> None:
@@ -117,27 +138,35 @@ async def callback_cancel_action(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-# ── Выполнение (старт / стоп / рестарт) ──────────────────────────────────────
-
-_ACTION_LABELS = {
-    "start_server":   ("▶️", "start",   "запущен",        "запуска"),
-    "stop_server":    ("⏹",  "stop",    "остановлен",     "остановки"),
-    "restart_server": ("🔁", "restart", "перезапущен",    "перезапуска"),
+_ACTIONS = {
+    "start_server": ("▶️", "start"),
+    "stop_server": ("⏹", "stop"),
+    "restart_server": ("🔁", "restart"),
 }
 
-@router.callback_query(F.data.in_(set(_ACTION_LABELS)))
+
+@router.callback_query(F.data.in_(set(_ACTIONS)))
 async def callback_execute_action(callback: CallbackQuery) -> None:
-    icon, action, done_word, fail_word = _ACTION_LABELS[callback.data]
+    icon, action = _ACTIONS[callback.data]
     await callback.answer()
     await callback.message.edit_text(f"{icon} Выполняю…")
 
-    result = await _run_systemctl(action)
-    if result == "ok":
-        await callback.message.answer(f"✅ Сервер успешно {done_word}.")
-        logger.info("systemctl %s executed by user %s", action, callback.from_user.id)
-    else:
-        await callback.message.answer(
-            f"❌ Ошибка {fail_word}:\n{result}",
+    try:
+        result = await getattr(server_process_manager, action)()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Server action %s failed", action)
+        await callback.message.edit_text(
+            f"❌ <b>Не удалось выполнить {action}</b>\n<code>{html.escape(str(exc))}</code>",
             parse_mode="HTML",
         )
+        return
 
+    messages = {
+        "started": "✅ Сервер запущен.",
+        "already_running": "ℹ️ Сервер уже запущен.",
+        "stopped": "✅ Сервер корректно остановлен.",
+        "already_stopped": "ℹ️ Сервер уже остановлен.",
+        "killed": "⚠️ Сервер не завершился вовремя и был принудительно остановлен.",
+    }
+    logger.info("Server action %s by Telegram user %s: %s", action, callback.from_user.id, result)
+    await callback.message.edit_text(messages.get(result, f"✅ Готово: {html.escape(result)}"))
