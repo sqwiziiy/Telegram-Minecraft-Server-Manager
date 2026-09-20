@@ -32,7 +32,7 @@ No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR 
 | 📊 Status | PID, uptime, process-tree RAM and online players |
 | 💻 RCON console | Run Minecraft commands from an isolated Telegram console mode |
 | 🧩 Mod manager | List, upload and delete `.jar` mods |
-| 💾 Backups | Create ZIP backups of the configured world directory |
+| 💾 Backups | Create RCON-coordinated ZIP backups with saves paused and flushed |
 | 📜 Logs | Show launch output and forward selected player/chat/death events |
 | 🔐 Access control | Only Telegram IDs from `ADMIN_IDS` are accepted |
 
@@ -163,6 +163,7 @@ The `mcbot` user must have normal filesystem permissions for `SERVER_DIR`, the m
 - Minecraft commands go through RCON; the bot does not expose a Linux shell.
 - Server startup uses an argv list and never `shell=True`.
 - RCON packet sizes are bounded before allocation.
+- Live backups pause saves, flush the world, archive it, then re-enable saves.
 - Telegram/RCON/log/file-name content is HTML-escaped before being rendered.
 - Mod uploads reject traversal names, enforce a size limit and refuse overwriting existing paths.
 - Secrets belong in `.env`; `.env` is ignored by Git and CI checks for common accidental secret patterns.
