@@ -1,175 +1,196 @@
-# Minecraft Server Manager — Telegram Bot
+# 🎮 Telegram Minecraft Server Manager
 
-Telegram-бот на **aiogram 3.x** для управления Minecraft Fabric 1.20.1 сервером на Linux.
+Небольшая self-hosted панель для управления Minecraft-сервером прямо из Telegram: запуск, остановка, рестарт, RCON-консоль, статус, моды, бэкапы и события из логов.
 
-## Структура проекта
+> Python 3.11+ · aiogram 3.x. Сам Minecraft **не обязан** работать через systemd.
 
-```
-.
-├── main.py                  # Точка входа, polling + фоновый мониторинг логов
-├── config.py                # Чтение конфигурации из .env
-├── requirements.txt
-├── .env.example             # Шаблон переменных окружения
-├── handlers/
-│   ├── start.py             # /start
-│   ├── status.py            # 📊 Статус — команда list через RCON
-│   ├── console.py           # 💻 Консоль — FSM-эмулятор консоли через RCON
-│   ├── mods.py              # 🧩 Моды — список, удаление, загрузка .jar
-│   └── system.py            # ⚙️ Система — CPU/RAM/диск, бэкап, рестарт
-├── keyboards/
-│   ├── main_menu.py         # ReplyKeyboard главного меню
-│   └── inline.py            # InlineKeyboard для действий
-├── middlewares/
-│   └── auth.py              # Проверка user_id по списку ADMIN_IDS
-└── services/
-    ├── rcon.py              # Асинхронный RCON-клиент (aiomcrcon)
-    ├── log_monitor.py       # Async-генератор tail -f для latest.log
-    └── backup.py            # Создание zip-архива папки мира
+[English README](README.md)
+
+## Что изменилось
+
+Главная идея проекта теперь простая: бот сам управляет процессом Minecraft и не вызывает `sudo systemctl minecraft ...`.
+
+Можно запускать существующий скрипт:
+
+```env
+SERVER_START_COMMAND=./start.sh
 ```
 
----
+или Java напрямую:
 
-## Быстрый старт
+```env
+SERVER_START_COMMAND=java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
+```
 
-### 1. Клонирование и окружение
+То есть больше не нужен отдельный Minecraft unit и sudoers-правило ради кнопок Start/Stop/Restart.
+
+## Возможности
+
+| Раздел | Что умеет |
+| --- | --- |
+| ▶️ Управление процессом | Запуск, остановка и рестарт Minecraft |
+| 📊 Статус | PID, uptime, RAM дерева процессов и список игроков |
+| 💻 RCON-консоль | Выполнение Minecraft-команд из Telegram |
+| 🧩 Моды | Просмотр, загрузка и удаление `.jar` |
+| 💾 Бэкапы | ZIP-бэкап указанной папки мира |
+| 📜 Логи | Последние строки запуска + уведомления о событиях сервера |
+| 🔐 Доступ | Только Telegram ID из `ADMIN_IDS` |
+
+## Как это устроено
+
+```mermaid
+flowchart LR
+    TG[Telegram admin] --> BOT[aiogram bot]
+    BOT --> PM[Process manager]
+    BOT --> RCON[RCON]
+    BOT --> MODS[Mods]
+    BOT --> BACKUP[Backup]
+    PM --> MC[Minecraft / start.sh]
+    RCON --> MC
+    MC --> LOG[latest.log]
+    LOG --> BOT
+```
+
+Process manager сохраняет PID и время создания процесса. Поэтому после перезапуска самого бота он может снова узнать управляемый Minecraft-процесс и не спутать его с другим процессом после PID reuse.
+
+## Быстрый запуск
+
+### 1. Установка
 
 ```bash
-cd ~/telegram_bot_manage_server_minecraft
+git clone https://github.com/sqwiziiy/Telegram-Minecraft-Server-Manager.git
+cd Telegram-Minecraft-Server-Manager
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Конфигурация
+### 2. Конфиг
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Заполните все переменные:
+Минимум:
 
-| Переменная           | Описание                                      |
-|----------------------|-----------------------------------------------|
-| `BOT_TOKEN`          | Токен бота от @BotFather                      |
-| `ADMIN_IDS`          | Telegram user_id через запятую                |
-| `RCON_HOST`          | Адрес сервера (обычно `localhost`)            |
-| `RCON_PORT`          | Порт RCON из `server.properties` (по ум. 25575) |
-| `RCON_PASSWORD`      | Пароль RCON из `server.properties`            |
-| `MINECRAFT_LOG_PATH` | Путь к `latest.log`                           |
-| `MODS_DIR`           | Папка с модами                                |
-| `WORLD_DIR`          | Папка мира для бэкапа                         |
-| `BACKUP_DIR`         | Куда сохранять бэкапы                         |
+```env
+BOT_TOKEN=123456:replace_me
+ADMIN_IDS=123456789
 
-В `server.properties` обязательно включите RCON:
+SERVER_DIR=/srv/minecraft
+SERVER_START_COMMAND=./start.sh
+
+RCON_HOST=127.0.0.1
+RCON_PORT=25575
+RCON_PASSWORD=replace_me
+```
+
+Нормальный `start.sh`:
+
+```bash
+#!/usr/bin/env bash
+exec java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
+```
+
+Важно: сервер должен оставаться foreground-процессом. Не запускайте Java через `&` и не daemonize её внутри `start.sh`.
+
+В `server.properties`:
 
 ```properties
 enable-rcon=true
 rcon.port=25575
-rcon.password=ВАШ_ПАРОЛЬ
+rcon.password=replace_me
 ```
 
-### 3. Запуск
+### 3. Запуск бота
 
 ```bash
+source .venv/bin/activate
 python main.py
 ```
 
-Для запуска через systemd — см. раздел ниже.
+После этого Minecraft запускается через Telegram → **⚙️ Система** → **▶️ Запустить**.
 
----
+## systemd для самого бота
 
-## Добавление пользователя бота в sudoers
-
-Чтобы бот мог выполнять `sudo systemctl restart minecraft` **без ввода пароля**, нужно создать правило sudoers.
-
-### Шаг 1: Узнайте под каким пользователем работает бот
-
-```bash
-# Если запускаете вручную
-whoami
-
-# Если через systemd (см. User= в unit-файле)
-systemctl show telegram-mc-bot.service -p User
-```
-
-Допустим, бот работает от пользователя **`mcbotuser`**.
-
-### Шаг 2: Создайте файл sudoers (через visudo —безопасный способ)
-
-```bash
-sudo visudo -f /etc/sudoers.d/minecraft-bot
-```
-
-Добавьте строку:
-
-```sudoers
-mcbotuser ALL=(ALL) NOPASSWD: /bin/systemctl restart minecraft
-```
-
-> **Важно:** никогда не давайте `NOPASSWD: ALL`. Ограничивайте ровно одной командой.
-
-### Шаг 3: Проверьте права файла
-
-```bash
-sudo chmod 0440 /etc/sudoers.d/minecraft-bot
-sudo visudo -c    # проверка синтаксиса
-```
-
-### Шаг 4: Проверьте работу
-
-```bash
-sudo -u mcbotuser sudo systemctl restart minecraft
-```
-
----
-
-## Запуск через systemd
-
-Создайте файл `/etc/systemd/system/telegram-mc-bot.service`:
+Для бота systemd оставить полезно. Мы убрали зависимость от systemd только для управления Minecraft.
 
 ```ini
 [Unit]
-Description=Minecraft Telegram Bot
-After=network.target
+Description=Telegram Minecraft Server Manager
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=mcbotuser
-WorkingDirectory=/home/mentality/scripts/telegram_bot_manage_server_minecraft
-ExecStart=/home/mentality/scripts/telegram_bot_manage_server_minecraft/.venv/bin/python main.py
+User=mcbot
+WorkingDirectory=/opt/telegram-minecraft-server-manager
+ExecStart=/opt/telegram-minecraft-server-manager/.venv/bin/python main.py
+EnvironmentFile=/opt/telegram-minecraft-server-manager/.env
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=/home/mentality/scripts/telegram_bot_manage_server_minecraft/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now telegram-mc-bot
-sudo systemctl status telegram-mc-bot
-```
+Пользователю `mcbot` нужны обычные права на `SERVER_DIR`, папку модов, мира, бэкапов и файлы PID/логов. Passwordless sudo для управления Minecraft больше не нужен.
 
----
+## Переменные окружения
 
-## Возможности бота
-
-| Раздел       | Что умеет                                                                       |
-|--------------|---------------------------------------------------------------------------------|
-| 📊 Статус    | Показывает список онлайн-игроков через RCON (`list`)                            |
-| 💻 Консоль   | FSM-режим: любое сообщение → RCON → ответ сервера                               |
-| 🧩 Моды      | Список .jar, удаление по кнопке, загрузка .jar через документ                   |
-| ⚙️ Система   | CPU / RAM / Диск, создание бэкапа, перезапуск сервера (с подтверждением)        |
-| 📋 Логи      | Автоматическая рассылка в чат: вход/выход игроков, сообщения, смерти            |
-
----
+| Переменная | Что задаёт |
+| --- | --- |
+| `BOT_TOKEN` | Токен Telegram-бота |
+| `ADMIN_IDS` | Разрешённые Telegram user ID |
+| `SERVER_DIR` | Рабочая папка Minecraft |
+| `SERVER_START_COMMAND` | Команда запуска, включая `.sh` |
+| `SERVER_PID_FILE` | PID + metadata управляемого процесса |
+| `SERVER_OUTPUT_LOG` | stdout/stderr процесса запуска |
+| `SERVER_STOP_TIMEOUT` | Сколько ждать graceful stop через RCON |
+| `RCON_HOST`, `RCON_PORT` | RCON endpoint |
+| `RCON_PASSWORD` | RCON пароль |
+| `MINECRAFT_LOG_PATH` | Путь к `latest.log` |
+| `MODS_DIR` | Папка модов |
+| `WORLD_DIR` | Мир для бэкапа |
+| `BACKUP_DIR` | Папка бэкапов |
+| `MAX_MOD_UPLOAD_MB` | Максимальный размер загружаемого мода |
 
 ## Безопасность
 
-- Доступ — только `ADMIN_IDS` из `.env` (middleware на все события).  
-- Загружаемые файлы — только `.jar` с валидацией имени (защита от path traversal).  
-- Удаление модов — проверка через `os.path.realpath()`, чтобы путь оставался внутри `MODS_DIR`.  
-- `sudo` — ограничено одной командой в sudoers.  
-- Секреты — только в `.env`, который должен быть в `.gitignore`.
+- Все сообщения и callback проходят проверку `ADMIN_IDS`.
+- Linux shell через Telegram не предоставляется: Minecraft-команды идут через RCON.
+- Запуск сервера выполняется без `shell=True`.
+- Размер входящего RCON-пакета проверяется до чтения.
+- Вывод RCON, логов, имён файлов и ошибок экранируется перед HTML-разметкой Telegram.
+- Загрузка модов ограничена по размеру, path traversal блокируется, существующие файлы не перезаписываются.
+- Секреты хранятся только в `.env`; CI дополнительно проверяет типичные случайно закоммиченные токены/пароли.
+- Любой ID в `ADMIN_IDS` фактически получает полный административный доступ к Minecraft-серверу.
+
+## Структура
+
+```text
+.
+├── main.py
+├── config.py
+├── handlers/
+│   ├── console.py
+│   ├── mods.py
+│   ├── start.py
+│   ├── status.py
+│   └── system.py
+├── keyboards/
+├── middlewares/
+│   └── auth.py
+├── services/
+│   ├── backup.py
+│   ├── log_monitor.py
+│   ├── rcon.py
+│   └── server_process.py
+└── .github/workflows/ci.yml
+```
+
+## Границы проекта
+
+Это менеджер одного доверенного приватного сервера, а не публичная multi-user hosting-панель. Бота не стоит открывать для незнакомых пользователей.
