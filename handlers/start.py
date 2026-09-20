@@ -10,8 +10,9 @@ router = Router()
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     await message.answer(
-        "👋 <b>Minecraft Server Manager</b>\n\n"
-        "Выберите раздел в меню ниже.",
+        "🎮 <b>Minecraft Server Manager</b>\n\n"
+        "Запуск, остановка, статус, RCON, моды и бэкапы — прямо из Telegram.\n"
+        "Выберите раздел ниже.",
         parse_mode="HTML",
         reply_markup=get_main_menu(),
     )
