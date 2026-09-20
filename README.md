@@ -1,174 +1,196 @@
-# Minecraft Server Manager — Telegram Bot
+# 🎮 Telegram Minecraft Server Manager
 
-A Telegram bot running **aiogram 3.x** for managing a Minecraft Fabric 1.20.1 server on Linux.
+Control a Linux Minecraft server from Telegram: start/stop/restart, RCON console, status, mods, backups and selected server events.
 
-## Project Structure
+> Built with Python 3.11+ and aiogram 3.x. Minecraft itself does **not** need to be managed by systemd.
 
-```
-.
-├── main.py # Entry point, polling + background log monitoring
-├── config.py # Reading configuration from .env
-├── requirements.txt
-├── .env.example # Environment variable template
-├── handlers/
-│ ├── start.py # /start
-│ ├── status.py # 📊 Status — list command via RCON
-│ ├── console.py # 💻 Console — FSM console emulator via RCON
-│ ├── mods.py # 🧩 Mods — list, delete, load .jar
-│ └── system.py # ⚙️ System — CPU/RAM/disk, backup, restart
-├── keyboards/
-│ ├── main_menu.py # ReplyKeyboard for the main menu
-│ └── inline.py # InlineKeyboard for actions
-├── middlewares/
-│ └── auth.py # Check user_id against the ADMIN_IDS list
-└── services/
-├── rcon.py # Asynchronous RCON client (aiomcrcon)
-├── log_monitor.py # Async tail -f generator for latest.log
-└── backup.py # Create a zip archive of the world folder
+[Русская версия](README_RU.md)
+
+## Why this project
+
+This is a small self-hosted control panel for a private Minecraft server. The bot runs separately from Minecraft and starts the server process directly from a configured command.
+
+That means you can use your existing launch script:
+
+```env
+SERVER_START_COMMAND=./start.sh
 ```
 
----
+or launch Java directly:
 
-## Quick Start
+```env
+SERVER_START_COMMAND=java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
+```
 
-### 1. Cloning and Environment
+No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR path in the bot.
+
+## Features
+
+| Feature | What it does |
+| --- | --- |
+| ▶️ Process control | Start, stop and restart Minecraft directly |
+| 📊 Status | PID, uptime, process-tree RAM and online players |
+| 💻 RCON console | Run Minecraft commands from an isolated Telegram console mode |
+| 🧩 Mod manager | List, upload and delete `.jar` mods |
+| 💾 Backups | Create ZIP backups of the configured world directory |
+| 📜 Logs | Show launch output and forward selected player/chat/death events |
+| 🔐 Access control | Only Telegram IDs from `ADMIN_IDS` are accepted |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    TG[Telegram admin] --> BOT[aiogram bot]
+    BOT --> PM[Process manager]
+    BOT --> RCON[RCON client]
+    BOT --> MODS[Mod manager]
+    BOT --> BACKUP[Backup service]
+    PM --> MC[Minecraft / start.sh]
+    RCON --> MC
+    MC --> LOG[latest.log]
+    LOG --> BOT
+```
+
+The process manager stores PID + process creation time. This lets the bot reconnect to the same managed process after the bot itself restarts while reducing PID-reuse mistakes.
+
+## Quick start
+
+### 1. Clone and install
 
 ```bash
-cd ~/telegram_bot_manage_server_minecraft
+git clone https://github.com/sqwiziiy/Telegram-Minecraft-Server-Manager.git
+cd Telegram-Minecraft-Server-Manager
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configuration
+### 2. Configure
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Fill in all variables:
+Minimum useful configuration:
 
-| Variable | Description |
-|----------------------|-----------------------------------------------|
-| `BOT_TOKEN` | Bot token from @BotFather |
-| `ADMIN_IDS` | Telegram user_id separated by commas |
-| `RCON_HOST` | Server address (usually `localhost`) |
-| `RCON_PORT` | RCON port from `server.properties` (default 25575) |
-| `RCON_PASSWORD` | RCON password from `server.properties` |
-| `MINECRAFT_LOG_PATH` | Path to `latest.log` |
-| `MODS_DIR` | Mods folder |
-| `WORLD_DIR` | World backup folder |
-| `BACKUP_DIR` | Where to save backups |
+```env
+BOT_TOKEN=123456:replace_me
+ADMIN_IDS=123456789
 
-Make sure to enable RCON in `server.properties`:
+SERVER_DIR=/srv/minecraft
+SERVER_START_COMMAND=./start.sh
+
+RCON_HOST=127.0.0.1
+RCON_PORT=25575
+RCON_PASSWORD=replace_me
+```
+
+Your `start.sh` should keep Minecraft in the foreground. Do **not** end it with `&` or daemonize Java.
+
+Example:
+
+```bash
+#!/usr/bin/env bash
+exec java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
+```
+
+Enable RCON in `server.properties`:
 
 ```properties
 enable-rcon=true
 rcon.port=25575
-rcon.password=YOUR_PASSWORD
+rcon.password=replace_me
 ```
 
-### 3. Launching
+### 3. Run the bot
 
 ```bash
+source .venv/bin/activate
 python main.py
 ```
 
-To launch via systemd, see the section below.
+The Minecraft server is then started from Telegram → **⚙️ System** → **▶️ Start**.
 
----
+## Running the bot with systemd
 
-## Adding the Bot User to Sudoers
-
-To allow the bot to execute `sudo systemctl restart minecraft` **without entering a password**, you need to create a sudoers rule.
-
-### Step 1: Find out which user the bot is running as
-
-```bash
-# If running manually
-whoami
-
-# If running via systemd (see User= in the unit file)
-systemctl show telegram-mc-bot.service -p User
-```
-
-Let's say the bot is running as user **`mcbotuser`**.
-
-### Step 2: Create a sudoers file (via visudo — the safe way)
-
-```bash
-sudo visudo -f /etc/sudoers.d/minecraft-bot
-```
-
-Add the line:
-
-```sudoers
-mcbotuser ALL=(ALL) NOPASSWD: /bin/systemctl restart minecraft
-```
-
-> **Important:** Never use `NOPASSWD: ALL`. Limit it to exactly one command.
-
-### Step 3: Check file permissions
-
-```bash
-sudo chmod 0440 /etc/sudoers.d/minecraft-bot
-sudo visudo -c # syntax check
-```
-
-### Step 4: Test operation
-
-```bash
-sudo -u mcbotuser sudo systemctl restart minecraft
-```
-
----
-
-## Starting via systemd
-
-Create the file `/etc/systemd/system/telegram-mc-bot.service`:
+Using systemd for the **bot** is still useful. Only Minecraft process control was removed from systemd.
 
 ```ini
 [Unit]
-Description=Minecraft Telegram Bot
-After=network.target
+Description=Telegram Minecraft Server Manager
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=mcbotuser
-WorkingDirectory=/home/mentality/scripts/telegram_bot_manage_server_minecraft
-ExecStart=/home/mentality/scripts/telegram_bot_manage_server_minecraft/.venv/bin/python main.py
+User=mcbot
+WorkingDirectory=/opt/telegram-minecraft-server-manager
+ExecStart=/opt/telegram-minecraft-server-manager/.venv/bin/python main.py
+EnvironmentFile=/opt/telegram-minecraft-server-manager/.env
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=/home/mentality/scripts/telegram_bot_manage_server_minecraft/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now telegram-mc-bot
-sudo systemctl status telegram-mc-bot
+The `mcbot` user must have normal filesystem permissions for `SERVER_DIR`, the mods directory, world directory, backup directory and manager log/PID files. It does not need passwordless sudo just to control Minecraft.
+
+## Configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `BOT_TOKEN` | Telegram bot token |
+| `ADMIN_IDS` | Allowed Telegram user IDs, comma-separated |
+| `SERVER_DIR` | Minecraft working directory |
+| `SERVER_START_COMMAND` | Start command; supports `.sh` directly |
+| `SERVER_PID_FILE` | Managed-process PID metadata |
+| `SERVER_OUTPUT_LOG` | Captured stdout/stderr from the launch process |
+| `SERVER_STOP_TIMEOUT` | Graceful RCON shutdown timeout |
+| `RCON_HOST` / `RCON_PORT` | Minecraft RCON endpoint |
+| `RCON_PASSWORD` | Minecraft RCON password |
+| `MINECRAFT_LOG_PATH` | `latest.log` used for event monitoring |
+| `MODS_DIR` | Mods directory |
+| `WORLD_DIR` | World directory to back up |
+| `BACKUP_DIR` | Backup destination |
+| `MAX_MOD_UPLOAD_MB` | Maximum Telegram mod upload size |
+
+## Security notes
+
+- Every message and callback is gated by `ADMIN_IDS`.
+- Minecraft commands go through RCON; the bot does not expose a Linux shell.
+- Server startup uses an argv list and never `shell=True`.
+- RCON packet sizes are bounded before allocation.
+- Telegram/RCON/log/file-name content is HTML-escaped before being rendered.
+- Mod uploads reject traversal names, enforce a size limit and refuse overwriting existing paths.
+- Secrets belong in `.env`; `.env` is ignored by Git and CI checks for common accidental secret patterns.
+- Treat every admin ID as full Minecraft-server administrator access.
+
+## Project structure
+
+```text
+.
+├── main.py
+├── config.py
+├── handlers/
+│   ├── console.py
+│   ├── mods.py
+│   ├── start.py
+│   ├── status.py
+│   └── system.py
+├── keyboards/
+├── middlewares/
+│   └── auth.py
+├── services/
+│   ├── backup.py
+│   ├── log_monitor.py
+│   ├── rcon.py
+│   └── server_process.py
+└── .github/workflows/ci.yml
 ```
 
----
+## Current scope
 
-## Bot features
-
-| Section | What it can do |
-|--------------|---------------------------------------------------------------------------------|
-| 📊 Status | Shows a list of online players via RCON (`list`) |
-| 💻 Console | FSM mode: any message → RCON → server response |
-| 🧩 Mods | List of .jar files, delete with a button, upload .jar files via a document |
-| ⚙️ System | CPU / RAM / Disk, backup creation, server restart (with confirmation) |
-| 📋 Logs | Automatic chat broadcast: player logins/logouts, messages, deaths |
-
----
-
-## Security
-
-- Access - only `ADMIN_IDS` from `.env` (middleware for all events).
-- Downloadable files — only `.jar` files with name validation (protection against path traversal).
-
-- Mod removal — check via `os`
+This project is intentionally small and focused on one trusted private server. It is not a multi-tenant hosting panel and should not be exposed as a public bot.
