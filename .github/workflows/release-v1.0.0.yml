@@ -1,0 +1,31 @@
+name: Publish v1.0.0
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/release-v1.0.0.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v1.0.0 already exists; nothing to do."
+            exit 0
+          fi
+
+          gh release create v1.0.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "v1.0.0 — Direct process manager & security overhaul" \
+            --notes-file RELEASE_NOTES_v1.0.0.md
