@@ -12,12 +12,12 @@ First release-ready version of Telegram Minecraft Server Manager.
 - Support for launching an existing `start.sh` through `SERVER_START_COMMAND`.
 - Support for direct Java launch commands.
 - Managed PID metadata with process creation-time validation.
-- Graceful server shutdown through RCON with SIGTERM/SIGKILL fallback.
+- Graceful server shutdown through RCON with a save-safe grace period and SIGTERM/SIGKILL fallback.
 - Captured server stdout/stderr through `SERVER_OUTPUT_LOG`.
 - Server PID, uptime and process-tree memory usage in the Telegram UI.
 - Launch-log viewer in the System panel.
 - Configurable mod upload size limit.
-- GitHub Actions CI for Python compilation and accidental-secret checks.
+- GitHub Actions CI for Python compilation, core unit tests and accidental-secret checks.
 - Rewritten English and Russian documentation with architecture and deployment examples.
 
 ### Changed
@@ -26,7 +26,7 @@ First release-ready version of Telegram Minecraft Server Manager.
 - Refreshed the Telegram main menu, System panel and welcome screen.
 - Status no longer sends a `say` command as a side effect.
 - Server configuration now uses `SERVER_DIR` and `SERVER_START_COMMAND`.
-- Backup handling uses `asyncio.to_thread`.
+- Live backups coordinate with Minecraft using `save-off` + `save-all flush` + `save-on` for a consistent world snapshot.
 - RCON console messaging and error presentation are clearer.
 
 ### Security
