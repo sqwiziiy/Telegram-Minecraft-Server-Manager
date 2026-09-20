@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 
 from aiogram import Bot, Dispatcher
@@ -18,21 +19,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-# ── Инициализация бота ────────────────────────────────────────────────────────
-
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML),
 )
-
 dp = Dispatcher(storage=MemoryStorage())
 
-# Middleware: проверка прав для всех входящих событий
 dp.message.middleware(AuthMiddleware())
 dp.callback_query.middleware(AuthMiddleware())
 
-# Роутеры: console ПЕРВЫМ — его FSM-фильтры перехватывают сообщения в console_mode
 dp.include_router(console.router)
 dp.include_router(start.router)
 dp.include_router(status.router)
@@ -40,51 +35,45 @@ dp.include_router(mods.router)
 dp.include_router(system.router)
 
 
-# ── Фоновая задача мониторинга логов ─────────────────────────────────────────
-
 async def _log_monitor_task() -> None:
-    """Читает latest.log и рассылает интересные строки всем администраторам."""
     while True:
         try:
             async for line in tail_log(MINECRAFT_LOG_PATH):
+                safe_line = html.escape(line)
                 for admin_id in ADMIN_IDS:
                     try:
-                        await bot.send_message(admin_id, f"📋 <code>{line}</code>")
+                        await bot.send_message(admin_id, f"📋 <code>{safe_line}</code>")
                     except Exception as send_exc:  # noqa: BLE001
-                        logger.warning("Не удалось отправить лог-строку admin %s: %s", admin_id, send_exc)
+                        logger.warning("Failed to send log line to admin %s: %s", admin_id, send_exc)
         except FileNotFoundError:
-            logger.warning("Лог-файл не найден: %s — повтор через 15 с", MINECRAFT_LOG_PATH)
+            logger.warning("Minecraft log not found: %s; retrying in 15s", MINECRAFT_LOG_PATH)
             await asyncio.sleep(15)
         except Exception as exc:  # noqa: BLE001
-            logger.error("Ошибка мониторинга логов: %s — повтор через 10 с", exc)
+            logger.exception("Log monitor failed: %s", exc)
             await asyncio.sleep(10)
 
 
-# ── Startup/Shutdown хуки ─────────────────────────────────────────────────────
-
 async def _on_startup() -> None:
-    logger.info("Бот запущен. Администраторы: %s", ADMIN_IDS)
+    logger.info("Bot started. Admins: %s", ADMIN_IDS)
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
                 admin_id,
                 "✅ <b>Minecraft Server Manager запущен.</b>\n"
-                "Используйте меню ниже или /start для навигации.",
+                "Управление сервером доступно из меню ниже.",
                 reply_markup=get_main_menu(),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Не удалось отправить приветствие admin %s: %s", admin_id, exc)
+            logger.warning("Failed to notify admin %s: %s", admin_id, exc)
 
 
 async def _on_shutdown() -> None:
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, "⛔ Бот остановлен.")
+            await bot.send_message(admin_id, "⛔ Minecraft Server Manager остановлен.")
         except Exception:  # noqa: BLE001
             pass
 
-
-# ── Точка входа ───────────────────────────────────────────────────────────────
 
 async def main() -> None:
     dp.startup.register(_on_startup)
