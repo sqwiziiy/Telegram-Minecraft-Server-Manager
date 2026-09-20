@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - name: Compile Python sources
+        run: python -m compileall -q .
+      - name: Reject accidental secrets
+        shell: bash
+        run: |
+          test ! -f .env
+          ! grep -R --line-number -E 'BOT_TOKEN=[0-9]+:[A-Za-z0-9_-]{20,}|RCON_PASSWORD=[^[:space:]]{12,}' \
+            --exclude='.env.example' --exclude-dir='.git' .
