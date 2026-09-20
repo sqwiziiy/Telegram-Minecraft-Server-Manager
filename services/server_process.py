@@ -48,7 +48,7 @@ class ServerProcessManager:
         self.output_log = Path(SERVER_OUTPUT_LOG).expanduser().resolve()
 
     def _build_argv(self) -> list[str]:
-        argv = shlex.split(SERVER_START_COMMAND)
+        argv = shlex.split(self.start_command)
         if not argv:
             raise RuntimeError("SERVER_START_COMMAND is empty")
 
@@ -105,7 +105,7 @@ class ServerProcessManager:
                 {
                     "pid": process.pid,
                     "create_time": process.create_time(),
-                    "command": SERVER_START_COMMAND,
+                    "command": self.start_command,
                 },
                 ensure_ascii=False,
             ),
