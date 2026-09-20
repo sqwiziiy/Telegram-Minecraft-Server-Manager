@@ -27,4 +27,4 @@ jobs:
         run: |
           test ! -f .env
           ! grep -R --line-number -E 'BOT_TOKEN=[0-9]+:[A-Za-z0-9_-]{20,}|RCON_PASSWORD=[^[:space:]]{12,}' \
-            --exclude='.env.example' --exclude-dir='.git' --exclude-dir='.github' --exclude-dir='tests' .
+            --exclude='.env.example' --exclude-dir='.git' --exclude-dir='.github' .
