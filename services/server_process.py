@@ -32,7 +32,7 @@ class ServerStatus:
 
 
 class ServerProcessManager:
-    """Starts and controls the Minecraft server without systemd or shell=True."""
+    """Start and control Minecraft directly, without systemd and without shell=True."""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
@@ -106,24 +106,39 @@ class ServerProcessManager:
         )
         os.replace(tmp, self.pid_file)
 
+    @staticmethod
+    def _tree_memory_mb(process: psutil.Process) -> float:
+        total = 0
+        processes = [process]
+        try:
+            processes.extend(process.children(recursive=True))
+        except psutil.Error:
+            pass
+        for item in processes:
+            try:
+                total += item.memory_info().rss
+            except psutil.Error:
+                pass
+        return total / 1024 / 1024
+
     async def status(self) -> ServerStatus:
         process = await asyncio.to_thread(self._get_managed_process)
         if process is None:
             return ServerStatus(running=False)
 
         try:
-            info = await asyncio.to_thread(
+            pid, uptime, memory = await asyncio.to_thread(
                 lambda: (
                     process.pid,
                     max(0, int(time.time() - process.create_time())),
-                    process.memory_info().rss / 1024 / 1024,
+                    self._tree_memory_mb(process),
                 )
             )
             return ServerStatus(
                 running=True,
-                pid=info[0],
-                uptime_seconds=info[1],
-                memory_mb=info[2],
+                pid=pid,
+                uptime_seconds=uptime,
+                memory_mb=memory,
             )
         except psutil.Error:
             return ServerStatus(running=False)
@@ -177,45 +192,45 @@ class ServerProcessManager:
         except psutil.NoSuchProcess:
             return True
 
+    async def _terminate_process_group(self, process: psutil.Process, sig: signal.Signals) -> None:
+        try:
+            pgid = await asyncio.to_thread(os.getpgid, process.pid)
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError, psutil.Error):
+            try:
+                if sig == signal.SIGKILL:
+                    process.kill()
+                else:
+                    process.terminate()
+            except psutil.NoSuchProcess:
+                pass
+
     async def stop(self) -> str:
         async with self._lock:
             process = await asyncio.to_thread(self._get_managed_process)
             if process is None:
                 return "already_stopped"
 
-            # First ask Minecraft to save and stop cleanly.
+            # Prefer Minecraft's own shutdown path so the world is saved cleanly.
+            rcon_result = ""
             try:
-                await send_rcon_command("stop")
+                rcon_result = await send_rcon_command("stop")
             except Exception:  # noqa: BLE001
                 logger.exception("Graceful RCON stop failed")
 
-            if await self._wait_stopped(process, SERVER_STOP_TIMEOUT):
-                self._remove_pid_file()
-                return "stopped"
+            if not rcon_result.startswith("❌"):
+                if await self._wait_stopped(process, SERVER_STOP_TIMEOUT):
+                    self._remove_pid_file()
+                    return "stopped"
+            else:
+                logger.warning("RCON stop unavailable, falling back to SIGTERM: %s", rcon_result)
 
-            # RCON unavailable or ignored: terminate the whole process group.
-            try:
-                pgid = await asyncio.to_thread(os.getpgid, process.pid)
-                os.killpg(pgid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError, psutil.Error):
-                try:
-                    process.terminate()
-                except psutil.NoSuchProcess:
-                    pass
-
+            await self._terminate_process_group(process, signal.SIGTERM)
             if await self._wait_stopped(process, min(10.0, SERVER_STOP_TIMEOUT)):
                 self._remove_pid_file()
                 return "stopped"
 
-            try:
-                pgid = await asyncio.to_thread(os.getpgid, process.pid)
-                os.killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, psutil.Error):
-                try:
-                    process.kill()
-                except psutil.NoSuchProcess:
-                    pass
-
+            await self._terminate_process_group(process, signal.SIGKILL)
             await self._wait_stopped(process, 5.0)
             self._remove_pid_file()
             return "killed"
