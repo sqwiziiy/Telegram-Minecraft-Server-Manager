@@ -22,6 +22,13 @@ from services.rcon import send_rcon_command
 
 logger = logging.getLogger(__name__)
 
+# Minecraft may close the RCON socket immediately after accepting "stop".
+# In these cases delivery is uncertain, so give the process time to exit cleanly.
+_RCON_STOP_UNCERTAIN_MARKERS = (
+    "Таймаут ожидания ответа",
+    "некорректный RCON-ответ",
+)
+
 
 @dataclass(slots=True)
 class ServerStatus:
@@ -205,6 +212,12 @@ class ServerProcessManager:
             except psutil.NoSuchProcess:
                 pass
 
+    @staticmethod
+    def _should_wait_after_rcon_stop(result: str) -> bool:
+        if not result.startswith("❌"):
+            return True
+        return any(marker in result for marker in _RCON_STOP_UNCERTAIN_MARKERS)
+
     async def stop(self) -> str:
         async with self._lock:
             process = await asyncio.to_thread(self._get_managed_process)
@@ -218,12 +231,15 @@ class ServerProcessManager:
             except Exception:  # noqa: BLE001
                 logger.exception("Graceful RCON stop failed")
 
-            if not rcon_result.startswith("❌"):
+            if self._should_wait_after_rcon_stop(rcon_result):
                 if await self._wait_stopped(process, SERVER_STOP_TIMEOUT):
                     self._remove_pid_file()
                     return "stopped"
             else:
-                logger.warning("RCON stop unavailable, falling back to SIGTERM: %s", rcon_result)
+                logger.warning(
+                    "RCON stop was not delivered; falling back to SIGTERM: %s",
+                    rcon_result,
+                )
 
             await self._terminate_process_group(process, signal.SIGTERM)
             if await self._wait_stopped(process, min(10.0, SERVER_STOP_TIMEOUT)):
