@@ -8,6 +8,8 @@ from aiogram.types import CallbackQuery, Document, Message
 
 from config import MAX_MOD_UPLOAD_MB, MODS_DIR
 from keyboards.inline import mod_delete_confirm_keyboard, mods_list_keyboard
+from middlewares.auth import require_permission
+from services.access_control import access_control
 
 router = Router()
 
@@ -28,20 +30,50 @@ def _sorted_jars() -> list[str] | None:
         return None
 
 
-def _mods_text(files: list[str]) -> str:
+def _mods_text(files: list[str], user_id: int) -> str:
+    can_upload = access_control.can(user_id, "mods.upload")
+    can_delete = access_control.can(user_id, "mods.delete")
+
     if not files:
-        return (
-            "📂 <b>Папка модов пуста.</b>\n\n"
-            "Отправьте <b>.jar</b> в этот чат, чтобы добавить мод."
-        )
+        text = "📂 <b>Папка модов пуста.</b>"
+        if can_upload:
+            text += "\n\nОтправьте <b>.jar</b> в этот чат, чтобы добавить мод."
+        return text
+
     lines = "\n".join(
         f"{i + 1}. <code>{html.escape(name)}</code>"
         for i, name in enumerate(files)
     )
-    return (
-        f"🧩 <b>Установленные моды ({len(files)})</b>\n\n"
-        f"{lines}\n\n"
-        "Нажмите <b>🗑 N</b> для удаления или отправьте новый <b>.jar</b>."
+    text = f"🧩 <b>Установленные моды ({len(files)})</b>\n\n{lines}"
+
+    actions: list[str] = []
+    if can_delete:
+        actions.append("нажмите <b>🗑 N</b> для удаления")
+    if can_upload:
+        actions.append("отправьте новый <b>.jar</b> для загрузки")
+    if actions:
+        text += "\n\n" + " или ".join(actions).capitalize() + "."
+
+    return text
+
+
+@router.message(F.text == "🧩 Моды")
+async def list_mods(message: Message) -> None:
+    if not await require_permission(message, "mods.view"):
+        return
+
+    files = _sorted_jars()
+    if files is None:
+        await message.answer(
+            f"❌ Папка модов не найдена:\n<code>{html.escape(MODS_DIR)}</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    await message.answer(
+        _mods_text(files, message.from_user.id),
+        parse_mode="HTML",
+        reply_markup=mods_list_keyboard(len(files), message.from_user.id),
     )
 
 
@@ -55,24 +87,11 @@ def _parse_index(data: str, prefix: str) -> int | None:
         return None
 
 
-@router.message(F.text == "🧩 Моды")
-async def list_mods(message: Message) -> None:
-    files = _sorted_jars()
-    if files is None:
-        await message.answer(
-            f"❌ Папка модов не найдена:\n<code>{html.escape(MODS_DIR)}</code>",
-            parse_mode="HTML",
-        )
-        return
-    await message.answer(
-        _mods_text(files),
-        parse_mode="HTML",
-        reply_markup=mods_list_keyboard(len(files)) if files else None,
-    )
-
-
 @router.callback_query(F.data.startswith("dm:"))
 async def ask_delete_mod(callback: CallbackQuery) -> None:
+    if not await require_permission(callback, "mods.delete"):
+        return
+
     idx = _parse_index(callback.data, "dm:")
     files = _sorted_jars()
     if idx is None or files is None or idx >= len(files):
@@ -90,6 +109,9 @@ async def ask_delete_mod(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("dm_ok:"))
 async def confirm_delete_mod(callback: CallbackQuery) -> None:
+    if not await require_permission(callback, "mods.delete"):
+        return
+
     idx = _parse_index(callback.data, "dm_ok:")
     files = _sorted_jars()
     if idx is None or files is None or idx >= len(files):
@@ -123,9 +145,10 @@ async def confirm_delete_mod(callback: CallbackQuery) -> None:
 
     new_files = _sorted_jars() or []
     await callback.message.edit_text(
-        f"✅ <code>{html.escape(mod_name)}</code> удалён.\n\n{_mods_text(new_files)}",
+        f"✅ <code>{html.escape(mod_name)}</code> удалён.\n\n"
+        f"{_mods_text(new_files, callback.from_user.id)}",
         parse_mode="HTML",
-        reply_markup=mods_list_keyboard(len(new_files)) if new_files else None,
+        reply_markup=mods_list_keyboard(len(new_files), callback.from_user.id),
     )
     await callback.answer()
 
@@ -138,6 +161,9 @@ async def cancel_delete_mod(callback: CallbackQuery) -> None:
 
 @router.message(F.document)
 async def upload_mod(message: Message) -> None:
+    if not await require_permission(message, "mods.upload"):
+        return
+
     doc: Document = message.document
     if not doc.file_name or not doc.file_name.lower().endswith(".jar"):
         await message.answer("❌ Разрешена загрузка только файлов <b>.jar</b>.", parse_mode="HTML")
@@ -174,7 +200,10 @@ async def upload_mod(message: Message) -> None:
         await status_msg.edit_text("❌ Файл с таким именем появился во время загрузки.")
         return
     except Exception as exc:  # noqa: BLE001
-        await status_msg.edit_text(f"❌ Ошибка загрузки: <code>{html.escape(str(exc))}</code>", parse_mode="HTML")
+        await status_msg.edit_text(
+            f"❌ Ошибка загрузки: <code>{html.escape(str(exc))}</code>",
+            parse_mode="HTML",
+        )
         return
     finally:
         try:
@@ -186,7 +215,7 @@ async def upload_mod(message: Message) -> None:
     await status_msg.edit_text(
         f"✅ Мод <code>{html.escape(safe_name)}</code> загружен.\n"
         "🔁 Для применения перезапустите сервер.\n\n"
-        + _mods_text(files),
+        + _mods_text(files, message.from_user.id),
         parse_mode="HTML",
-        reply_markup=mods_list_keyboard(len(files)) if files else None,
+        reply_markup=mods_list_keyboard(len(files), message.from_user.id),
     )

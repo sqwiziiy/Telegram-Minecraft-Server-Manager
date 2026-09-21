@@ -34,13 +34,13 @@ SERVER_START_COMMAND=java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
 | 🧩 Моды | Просмотр, загрузка и удаление `.jar` |
 | 💾 Бэкапы | Согласованный ZIP-бэкап через `save-off` → `save-all flush` → `save-on` |
 | 📜 Логи | Последние строки запуска + уведомления о событиях сервера |
-| 🔐 Доступ | Только Telegram ID из `ADMIN_IDS` |
+| 🔐 Доступ | `OWNER_IDS` + роли и отдельные permissions из `users.json` |
 
 ## Как это устроено
 
 ```mermaid
 flowchart LR
-    TG[Telegram admin] --> BOT[aiogram bot]
+    TG[Telegram user] --> BOT[aiogram bot]
     BOT --> PM[Process manager]
     BOT --> RCON[RCON]
     BOT --> MODS[Mods]
@@ -77,7 +77,7 @@ nano .env
 
 ```env
 BOT_TOKEN=123456:replace_me
-ADMIN_IDS=123456789
+OWNER_IDS=123456789
 
 SERVER_DIR=/srv/minecraft
 SERVER_START_COMMAND=./start.sh
@@ -86,6 +86,50 @@ RCON_HOST=127.0.0.1
 RCON_PORT=25575
 RCON_PASSWORD=replace_me
 ```
+
+### Гибкий доступ для других пользователей
+
+Владелец задаётся в `.env` и всегда имеет полный доступ:
+
+```env
+OWNER_IDS=123456789
+```
+
+Для друзей и других пользователей скопируйте пример политики:
+
+```bash
+cp users.example.json users.json
+nano users.json
+```
+
+Например, профиль друга с запуском/остановкой/рестартом и **только просмотром модов**:
+
+```json
+{
+  "users": {
+    "987654321": {
+      "name": "Friend",
+      "role": "operator",
+      "allow": [],
+      "deny": []
+    }
+  }
+}
+```
+
+Роль `operator` даёт только:
+
+- `server.status`
+- `server.start`
+- `server.stop`
+- `server.restart`
+- `mods.view`
+
+Консоль, удаление/загрузка модов, логи, системная информация и бэкапы для неё закрыты. Кнопки без прав не показываются, но главное — каждый handler и callback дополнительно проверяет permission на backend.
+
+Для кастомной настройки используйте `role: "custom"` и `allow`, либо добавляйте/убирайте отдельные права через `allow` / `deny`. `deny` всегда имеет приоритет.
+
+После изменения `users.json` перезапустите бота, чтобы перечитать политику доступа.
 
 Нормальный `start.sh`:
 
@@ -143,7 +187,7 @@ WantedBy=multi-user.target
 | Переменная | Что задаёт |
 | --- | --- |
 | `BOT_TOKEN` | Токен Telegram-бота |
-| `ADMIN_IDS` | Разрешённые Telegram user ID |
+| `OWNER_IDS` | Telegram ID владельцев с полным доступом |\n| `ADMIN_IDS` | Legacy-список полного доступа для совместимости с v1.0 |\n| `ACCESS_USERS_FILE` | Путь к `users.json` с ролями и permissions |
 | `SERVER_DIR` | Рабочая папка Minecraft |
 | `SERVER_START_COMMAND` | Команда запуска, включая `.sh` |
 | `SERVER_PID_FILE` | PID + metadata управляемого процесса |
@@ -159,7 +203,7 @@ WantedBy=multi-user.target
 
 ## Безопасность
 
-- Все сообщения и callback проходят проверку `ADMIN_IDS`.
+- Все сообщения и callback сначала проходят общую авторизацию, а опасные действия дополнительно проверяют конкретный permission.
 - Linux shell через Telegram не предоставляется: Minecraft-команды идут через RCON.
 - Запуск сервера выполняется без `shell=True`.
 - Размер входящего RCON-пакета проверяется до чтения.
@@ -167,7 +211,7 @@ WantedBy=multi-user.target
 - Вывод RCON, логов, имён файлов и ошибок экранируется перед HTML-разметкой Telegram.
 - Загрузка модов ограничена по размеру, path traversal блокируется, существующие файлы не перезаписываются.
 - Секреты хранятся только в `.env`; CI дополнительно проверяет типичные случайно закоммиченные токены/пароли.
-- Любой ID в `ADMIN_IDS` фактически получает полный административный доступ к Minecraft-серверу.
+- `OWNER_IDS` и legacy `ADMIN_IDS` имеют полный доступ; пользователи из `users.json` получают только явно разрешённые возможности.
 
 ## Структура
 

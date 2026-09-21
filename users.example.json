@@ -1,0 +1,10 @@
+{
+  "users": {
+    "123456789": {
+      "name": "Friend",
+      "role": "operator",
+      "allow": [],
+      "deny": []
+    }
+  }
+}
