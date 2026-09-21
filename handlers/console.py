@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 
 from keyboards.inline import console_exit_keyboard
 from keyboards.main_menu import get_main_menu
+from middlewares.auth import require_permission
 from services.rcon import send_rcon_command
 
 router = Router()
@@ -18,6 +19,9 @@ class ConsoleStates(StatesGroup):
 
 @router.message(F.text == "💻 Консоль")
 async def enter_console(message: Message, state: FSMContext) -> None:
+    if not await require_permission(message, "console.use"):
+        return
+
     await state.set_state(ConsoleStates.console_mode)
     await message.answer(
         "💻 <b>RCON-консоль активна.</b>\n"
@@ -32,12 +36,19 @@ async def enter_console(message: Message, state: FSMContext) -> None:
 async def exit_console_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.message.edit_text("✅ Вы вышли из RCON-консоли.")
-    await callback.message.answer("Главное меню:", reply_markup=get_main_menu())
+    await callback.message.answer(
+        "Главное меню:",
+        reply_markup=get_main_menu(callback.from_user.id),
+    )
     await callback.answer()
 
 
 @router.message(ConsoleStates.console_mode)
-async def handle_console_input(message: Message) -> None:
+async def handle_console_input(message: Message, state: FSMContext) -> None:
+    if not await require_permission(message, "console.use"):
+        await state.clear()
+        return
+
     command = (message.text or "").strip()
     if not command:
         return
