@@ -11,6 +11,7 @@ from config import ADMIN_IDS, BOT_TOKEN, MINECRAFT_LOG_PATH
 from handlers import console, mods, start, status, system
 from keyboards.main_menu import get_main_menu
 from middlewares.auth import AuthMiddleware
+from services.access_control import access_control
 from services.log_monitor import tail_log
 
 logging.basicConfig(
@@ -40,11 +41,11 @@ async def _log_monitor_task() -> None:
         try:
             async for line in tail_log(MINECRAFT_LOG_PATH):
                 safe_line = html.escape(line)
-                for admin_id in ADMIN_IDS:
+                for user_id in access_control.users_with_permission("logs.view"):
                     try:
-                        await bot.send_message(admin_id, f"📋 <code>{safe_line}</code>")
+                        await bot.send_message(user_id, f"📋 <code>{safe_line}</code>")
                     except Exception as send_exc:  # noqa: BLE001
-                        logger.warning("Failed to send log line to admin %s: %s", admin_id, send_exc)
+                        logger.warning("Failed to send log line to user %s: %s", user_id, send_exc)
         except FileNotFoundError:
             logger.warning("Minecraft log not found: %s; retrying in 15s", MINECRAFT_LOG_PATH)
             await asyncio.sleep(15)
@@ -54,14 +55,14 @@ async def _log_monitor_task() -> None:
 
 
 async def _on_startup() -> None:
-    logger.info("Bot started. Admins: %s", ADMIN_IDS)
+    logger.info("Bot started. Full-access users: %s", ADMIN_IDS)
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
                 admin_id,
                 "✅ <b>Minecraft Server Manager запущен.</b>\n"
                 "Управление сервером доступно из меню ниже.",
-                reply_markup=get_main_menu(),
+                reply_markup=get_main_menu(admin_id),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to notify admin %s: %s", admin_id, exc)
