@@ -13,12 +13,6 @@ _SYSTEM_PANEL_PERMISSIONS = (
     "backup.create",
 )
 
-_MOD_PANEL_PERMISSIONS = (
-    "mods.view",
-    "mods.upload",
-    "mods.delete",
-)
-
 
 def _can_any(user_id: int, permissions: tuple[str, ...]) -> bool:
     return any(access_control.can(user_id, permission) for permission in permissions)
@@ -38,7 +32,7 @@ def get_main_menu(user_id: int) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
     second_row: list[KeyboardButton] = []
     if access_control.can(user_id, "console.use"):
         second_row.append(KeyboardButton(text="💻 Консоль"))
-    if _can_any(user_id, _MOD_PANEL_PERMISSIONS):
+    if access_control.can(user_id, "mods.view"):
         second_row.append(KeyboardButton(text="🧩 Моды"))
     if second_row:
         rows.append(second_row)
