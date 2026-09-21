@@ -43,10 +43,11 @@ if not OWNER_IDS:
 
 # Compatibility alias for code that has not yet moved to AccessControl.
 ADMIN_IDS: list[int] = sorted(set(OWNER_IDS) | set(LEGACY_ADMIN_IDS))
-ACCESS_USERS_FILE: str = os.getenv(
-    "ACCESS_USERS_FILE",
-    str(PROJECT_DIR / "users.json"),
-)
+
+_access_users_path = Path(os.getenv("ACCESS_USERS_FILE", "users.json")).expanduser()
+if not _access_users_path.is_absolute():
+    _access_users_path = PROJECT_DIR / _access_users_path
+ACCESS_USERS_FILE: str = str(_access_users_path.resolve())
 
 RCON_HOST: str = os.getenv("RCON_HOST", "127.0.0.1")
 RCON_PORT: int = int(os.getenv("RCON_PORT", "25575"))
