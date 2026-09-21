@@ -34,13 +34,13 @@ No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR 
 | 🧩 Mod manager | List, upload and delete `.jar` mods |
 | 💾 Backups | Create RCON-coordinated ZIP backups with saves paused and flushed |
 | 📜 Logs | Show launch output and forward selected player/chat/death events |
-| 🔐 Access control | Only Telegram IDs from `ADMIN_IDS` are accepted |
+| 🔐 Access control | `OWNER_IDS` plus per-user roles and permissions from `users.json` |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    TG[Telegram admin] --> BOT[aiogram bot]
+    TG[Telegram user] --> BOT[aiogram bot]
     BOT --> PM[Process manager]
     BOT --> RCON[RCON client]
     BOT --> MODS[Mod manager]
@@ -77,7 +77,7 @@ Minimum useful configuration:
 
 ```env
 BOT_TOKEN=123456:replace_me
-ADMIN_IDS=123456789
+OWNER_IDS=123456789
 
 SERVER_DIR=/srv/minecraft
 SERVER_START_COMMAND=./start.sh
@@ -86,6 +86,50 @@ RCON_HOST=127.0.0.1
 RCON_PORT=25575
 RCON_PASSWORD=replace_me
 ```
+
+### Granular access for other users
+
+Owners are configured in `.env` and always have full access:
+
+```env
+OWNER_IDS=123456789
+```
+
+For friends or other users, copy the example access policy:
+
+```bash
+cp users.example.json users.json
+nano users.json
+```
+
+Example for a friend who may start, stop and restart the server and **only view mods**:
+
+```json
+{
+  "users": {
+    "987654321": {
+      "name": "Friend",
+      "role": "operator",
+      "allow": [],
+      "deny": []
+    }
+  }
+}
+```
+
+The built-in `operator` role grants only:
+
+- `server.status`
+- `server.start`
+- `server.stop`
+- `server.restart`
+- `mods.view`
+
+It does not grant RCON console access, mod upload/delete, logs, host system information or backups. Unauthorized buttons are hidden, and every sensitive handler/callback also checks the permission server-side.
+
+Use `role: "custom"` for an empty baseline, or adjust a preset with `allow` and `deny`. `deny` always wins.
+
+Restart the bot after editing `users.json` so the policy is reloaded.
 
 Your `start.sh` should keep Minecraft in the foreground. Do **not** end it with `&` or daemonize Java.
 
@@ -143,7 +187,7 @@ The `mcbot` user must have normal filesystem permissions for `SERVER_DIR`, the m
 | Variable | Purpose |
 | --- | --- |
 | `BOT_TOKEN` | Telegram bot token |
-| `ADMIN_IDS` | Allowed Telegram user IDs, comma-separated |
+| `OWNER_IDS` | Full-access owner Telegram IDs, comma-separated |\n| `ADMIN_IDS` | Legacy full-access list kept for v1.0 compatibility |\n| `ACCESS_USERS_FILE` | Path to `users.json` with roles and permissions |
 | `SERVER_DIR` | Minecraft working directory |
 | `SERVER_START_COMMAND` | Start command; supports `.sh` directly |
 | `SERVER_PID_FILE` | Managed-process PID metadata |
@@ -159,7 +203,7 @@ The `mcbot` user must have normal filesystem permissions for `SERVER_DIR`, the m
 
 ## Security notes
 
-- Every message and callback is gated by `ADMIN_IDS`.
+- Every message and callback is authenticated, while sensitive actions also require their specific permission.
 - Minecraft commands go through RCON; the bot does not expose a Linux shell.
 - Server startup uses an argv list and never `shell=True`.
 - RCON packet sizes are bounded before allocation.
@@ -167,7 +211,7 @@ The `mcbot` user must have normal filesystem permissions for `SERVER_DIR`, the m
 - Telegram/RCON/log/file-name content is HTML-escaped before being rendered.
 - Mod uploads reject traversal names, enforce a size limit and refuse overwriting existing paths.
 - Secrets belong in `.env`; `.env` is ignored by Git and CI checks for common accidental secret patterns.
-- Treat every admin ID as full Minecraft-server administrator access.
+- `OWNER_IDS` and legacy `ADMIN_IDS` retain full access; `users.json` users receive only their effective permissions.
 
 ## Project structure
 
