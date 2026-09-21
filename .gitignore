@@ -1,3 +1,4 @@
 __pycache__/
 .env
+users.json
 handlers/__pycache__/
