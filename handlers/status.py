@@ -4,6 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from middlewares.auth import require_permission
 from services.rcon import send_rcon_command
 from services.server_process import server_process_manager
 
@@ -17,6 +18,9 @@ def _format_uptime(seconds: int) -> str:
 
 
 async def server_status(message: Message) -> None:
+    if not await require_permission(message, "server.status"):
+        return
+
     process = await server_process_manager.status()
     if not process.running:
         await message.answer(
