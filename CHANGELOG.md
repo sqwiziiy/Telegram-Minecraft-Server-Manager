@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased] - v1.1.0
+
+### Added
+
+- Granular per-user access control through `users.json`.
+- Built-in `owner`, `admin`, `operator`, `viewer` and `custom` roles.
+- Per-user `allow` and `deny` permission overrides.
+- `OWNER_IDS` for full-access owners while keeping legacy `ADMIN_IDS` compatibility.
+- Permission-aware Telegram menus and read-only mod listings.
+- Unit tests for access policy resolution and operator UI visibility.
+
+### Security
+
+- Sensitive handlers and callbacks enforce permissions server-side; hidden buttons are not treated as an authorization boundary.
+- Unknown users, roles and permission names fail closed.
+- The default `operator` role cannot use RCON, upload/delete mods, view launch logs or create backups.
+- Live log forwarding follows the `logs.view` permission.
+
+### Migration
+
+Existing v1.0 installations using only `ADMIN_IDS` keep full access without changes.
+
+For new setups, configure owners with:
+
+```env
+OWNER_IDS=123456789
+```
+
+Then copy `users.example.json` to `users.json` for limited-access users.
+
 ## [v1.0.0] - 2026-09-20
 
 First release-ready version of Telegram Minecraft Server Manager.
