@@ -4,7 +4,7 @@ import logging
 import secrets
 from dataclasses import asdict
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path as FilePath
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
@@ -91,15 +91,15 @@ async def _status_payload(server: ManagedServer, *, include_players: bool = True
     return result
 
 
-def _server_root(server: ManagedServer) -> Path:
+def _server_root(server: ManagedServer) -> FilePath:
     return server.manager.server_dir.resolve()
 
 
-def _safe_server_path(server: ManagedServer, relative_path: str) -> tuple[Path, Path]:
+def _safe_server_path(server: ManagedServer, relative_path: str) -> tuple[FilePath, FilePath]:
     root = _server_root(server)
     raw = (relative_path or ".").strip()
 
-    candidate_input = Path(raw)
+    candidate_input = FilePath(raw)
     if candidate_input.is_absolute():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -117,13 +117,13 @@ def _safe_server_path(server: ManagedServer, relative_path: str) -> tuple[Path, 
     return root, candidate
 
 
-def _display_relative_path(root: Path, path: Path) -> str:
+def _display_relative_path(root: FilePath, path: FilePath) -> str:
     relative = path.relative_to(root)
     text = relative.as_posix()
     return "." if text == "." else text
 
 
-def _looks_sensitive(path: Path) -> bool:
+def _looks_sensitive(path: FilePath) -> bool:
     lowered_parts = {part.casefold() for part in path.parts}
     name = path.name.casefold()
 
@@ -186,7 +186,7 @@ def _redact_sensitive_lines(text: str) -> str:
     return "\n".join(output)
 
 
-def _decode_file_content(path: Path) -> str:
+def _decode_file_content(path: FilePath) -> str:
     if path.suffix.casefold() == ".gz":
         with gzip.open(path, "rb") as handle:
             data = handle.read(MAX_FILE_READ_BYTES + 1)
