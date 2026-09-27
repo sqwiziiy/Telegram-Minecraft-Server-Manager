@@ -59,6 +59,8 @@ ACCESS_USERS_FILE: str = str(_access_users_path.resolve())
 RCON_HOST: str = os.getenv("RCON_HOST", "127.0.0.1")
 RCON_PORT: int = int(os.getenv("RCON_PORT", "25575"))
 RCON_PASSWORD: str = os.getenv("RCON_PASSWORD", "")
+if not 1 <= RCON_PORT <= 65535:
+    raise RuntimeError("RCON_PORT must be between 1 and 65535")
 
 SERVER_DIR: str = os.getenv("SERVER_DIR", "/opt/minecraft")
 

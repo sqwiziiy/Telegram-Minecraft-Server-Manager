@@ -4,218 +4,193 @@ import re
 import tempfile
 
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Document, Message
 
-from config import MAX_MOD_UPLOAD_MB, MODS_DIR
-from keyboards.inline import mod_delete_confirm_keyboard, mods_list_keyboard
-from middlewares.auth import require_permission
+from config import MAX_MOD_UPLOAD_MB
+from keyboards.inline import mods_list_keyboard, mod_delete_confirm_keyboard
+from middlewares.auth import deny_access
 from services.access_control import access_control
+from services.telegram_context import resolve_server
 
 router = Router()
 
+
+class ModsStates(StatesGroup):
+    awaiting_upload = State()
 _SAFE_NAME_RE = re.compile(r'^[\w\-. +\[\]()@#]+\.jar$', re.ASCII)
 
 
-def _is_safe_jar_name(name: str) -> bool:
+def _safe(name: str) -> bool:
     return bool(_SAFE_NAME_RE.fullmatch(name)) and "/" not in name and "\\" not in name
 
 
-def _sorted_jars() -> list[str] | None:
+def _safe_upload_name(original: str) -> str | None:
+    safe_name = os.path.basename(original)
+    if safe_name != original or not _safe(safe_name):
+        return None
+    return safe_name
+
+
+def _files(mods_dir: str) -> list[str] | None:
     try:
-        return sorted(
-            f for f in os.listdir(MODS_DIR)
-            if f.lower().endswith(".jar") and os.path.isfile(os.path.join(MODS_DIR, f))
-        )
+        return sorted(f for f in os.listdir(mods_dir) if f.lower().endswith(".jar") and os.path.isfile(os.path.join(mods_dir, f)))
     except FileNotFoundError:
         return None
 
 
-def _mods_text(files: list[str], user_id: int) -> str:
-    can_upload = access_control.can(user_id, "mods.upload")
-    can_delete = access_control.can(user_id, "mods.delete")
-
-    if not files:
-        text = "📂 <b>Папка модов пуста.</b>"
-        if can_upload:
-            text += "\n\nОтправьте <b>.jar</b> в этот чат, чтобы добавить мод."
-        return text
-
-    lines = "\n".join(
-        f"{i + 1}. <code>{html.escape(name)}</code>"
-        for i, name in enumerate(files)
-    )
-    text = f"🧩 <b>Установленные моды ({len(files)})</b>\n\n{lines}"
-
-    actions: list[str] = []
-    if can_delete:
-        actions.append("нажмите <b>🗑 N</b> для удаления")
-    if can_upload:
-        actions.append("отправьте новый <b>.jar</b> для загрузки")
-    if actions:
-        text += "\n\n" + " или ".join(actions).capitalize() + "."
-
+def _text(files: list[str], user_id: int, server_id: str) -> str:
+    text = "🧩 <b>Моды</b>\n\n" + ("\n".join(f"{i + 1}. <code>{html.escape(f)}</code>" for i, f in enumerate(files)) if files else "Папка модов пуста.")
+    if access_control.can_server(user_id, server_id, "mods.upload"):
+        text += "\n\nОтправьте .jar для загрузки."
     return text
 
 
-@router.message(F.text == "🧩 Моды")
-async def list_mods(message: Message) -> None:
-    if not await require_permission(message, "mods.view"):
+@router.callback_query(lambda c: c.data and c.data.startswith("mods:"))
+async def list_mods(callback: CallbackQuery, state: FSMContext) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
         return
-
-    files = _sorted_jars()
+    if not access_control.can_server(callback.from_user.id, server_id, "mods.view"):
+        await deny_access(callback)
+        return
+    await state.clear()
+    await state.update_data(server_id=server_id)
+    await state.set_state(ModsStates.awaiting_upload)
+    files = _files(server.mods_dir)
     if files is None:
-        await message.answer(
-            f"❌ Папка модов не найдена:\n<code>{html.escape(MODS_DIR)}</code>",
+        await callback.message.edit_text(
+            f"❌ Папка модов не найдена:\n<code>{html.escape(server.mods_dir)}</code>",
             parse_mode="HTML",
+            reply_markup=mods_list_keyboard(0, callback.from_user.id, server_id),
         )
+        await callback.answer()
         return
-
-    await message.answer(
-        _mods_text(files, message.from_user.id),
-        parse_mode="HTML",
-        reply_markup=mods_list_keyboard(len(files), message.from_user.id),
-    )
-
-
-def _parse_index(data: str, prefix: str) -> int | None:
-    if not data.startswith(prefix):
-        return None
-    try:
-        value = int(data[len(prefix):])
-        return value if value >= 0 else None
-    except ValueError:
-        return None
-
-
-@router.callback_query(F.data.startswith("dm:"))
-async def ask_delete_mod(callback: CallbackQuery) -> None:
-    if not await require_permission(callback, "mods.delete"):
-        return
-
-    idx = _parse_index(callback.data, "dm:")
-    files = _sorted_jars()
-    if idx is None or files is None or idx >= len(files):
-        await callback.answer("❌ Список модов изменился. Откройте его снова.", show_alert=True)
-        return
-
-    mod_name = files[idx]
-    await callback.message.answer(
-        f"🗑 Удалить <code>{html.escape(mod_name)}</code>?",
-        parse_mode="HTML",
-        reply_markup=mod_delete_confirm_keyboard(idx),
-    )
+    await callback.message.edit_text(_text(files, callback.from_user.id, server_id), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, server_id))
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("dm_ok:"))
-async def confirm_delete_mod(callback: CallbackQuery) -> None:
-    if not await require_permission(callback, "mods.delete"):
-        return
-
-    idx = _parse_index(callback.data, "dm_ok:")
-    files = _sorted_jars()
-    if idx is None or files is None or idx >= len(files):
-        await callback.answer("❌ Список модов изменился.", show_alert=True)
-        return
-
-    mod_name = files[idx]
-    if not _is_safe_jar_name(mod_name):
-        await callback.answer("❌ Некорректное имя файла.", show_alert=True)
-        return
-
-    real_mods = os.path.realpath(MODS_DIR)
-    real_target = os.path.realpath(os.path.join(MODS_DIR, mod_name))
+def _parts(data: str, prefix: str) -> tuple[str, int] | None:
     try:
-        inside_mods = os.path.commonpath([real_mods, real_target]) == real_mods
+        sid, raw_idx = data.removeprefix(prefix).split(":", 1)
+        idx = int(raw_idx)
+        return (sid, idx) if idx >= 0 else None
+    except (ValueError, AttributeError):
+        return None
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("dm:"))
+async def ask_delete(callback: CallbackQuery) -> None:
+    parsed = _parts(callback.data, "dm:")
+    if not parsed:
+        await deny_access(callback)
+        return
+    sid, idx = parsed
+    server = resolve_server(sid)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, sid, "mods.delete"):
+        await deny_access(callback)
+        return
+    files = _files(server.mods_dir)
+    if files is None or idx >= len(files):
+        await callback.answer("Список модов изменился.", show_alert=True)
+        return
+    await callback.message.edit_text(f"🗑 Удалить <code>{html.escape(files[idx])}</code>?", parse_mode="HTML", reply_markup=mod_delete_confirm_keyboard(sid, idx))
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("dm_ok:"))
+async def confirm_delete(callback: CallbackQuery) -> None:
+    parsed = _parts(callback.data, "dm_ok:")
+    if not parsed:
+        await deny_access(callback)
+        return
+    sid, idx = parsed
+    server = resolve_server(sid)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, sid, "mods.delete"):
+        await deny_access(callback)
+        return
+    files = _files(server.mods_dir)
+    if files is None or idx >= len(files) or not _safe(files[idx]):
+        await callback.answer("Некорректный файл.", show_alert=True)
+        return
+    root = os.path.realpath(server.mods_dir)
+    target = os.path.realpath(os.path.join(server.mods_dir, files[idx]))
+    try:
+        inside_mods = os.path.commonpath([root, target]) == root
     except ValueError:
         inside_mods = False
-
     if not inside_mods:
-        await callback.answer("❌ Недопустимый путь.", show_alert=True)
+        await callback.answer("Недопустимый путь.", show_alert=True)
         return
-
     try:
-        os.remove(real_target)
+        os.remove(target)
     except FileNotFoundError:
-        await callback.answer("❌ Файл уже удалён.", show_alert=True)
+        await callback.answer("Файл уже удалён.", show_alert=True)
         return
-    except OSError as exc:
-        await callback.answer(f"❌ Ошибка удаления: {exc}", show_alert=True)
+    await callback.answer("Удалено")
+    files = _files(server.mods_dir) or []
+    await callback.message.edit_text(_text(files, callback.from_user.id, sid), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, sid))
+
+
+@router.message(ModsStates.awaiting_upload, F.document)
+async def upload_mod(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    sid = data.get("server_id")
+    server = resolve_server(sid)
+    if server is None:
+        await message.answer("❌ Сервер больше не настроен.")
+        await state.clear()
         return
-
-    new_files = _sorted_jars() or []
-    await callback.message.edit_text(
-        f"✅ <code>{html.escape(mod_name)}</code> удалён.\n\n"
-        f"{_mods_text(new_files, callback.from_user.id)}",
-        parse_mode="HTML",
-        reply_markup=mods_list_keyboard(len(new_files), callback.from_user.id),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "dm_cancel")
-async def cancel_delete_mod(callback: CallbackQuery) -> None:
-    await callback.message.edit_text("❌ Удаление отменено.")
-    await callback.answer()
-
-
-@router.message(F.document)
-async def upload_mod(message: Message) -> None:
-    if not await require_permission(message, "mods.upload"):
+    if not access_control.can_server(message.from_user.id, sid, "mods.upload"):
+        await message.answer("⛔ Откройте сервер с правом загрузки модов.")
         return
-
     doc: Document = message.document
-    if not doc.file_name or not doc.file_name.lower().endswith(".jar"):
-        await message.answer("❌ Разрешена загрузка только файлов <b>.jar</b>.", parse_mode="HTML")
+    safe_name = _safe_upload_name(doc.file_name or "")
+    if not doc.file_name or not doc.file_name.lower().endswith(".jar") or safe_name is None:
+        await message.answer("❌ Разрешена загрузка только безопасных файлов .jar.")
         return
-
     if doc.file_size and doc.file_size > MAX_MOD_UPLOAD_MB * 1024 * 1024:
         await message.answer(f"❌ Файл больше лимита {MAX_MOD_UPLOAD_MB} MB.")
         return
-
-    safe_name = os.path.basename(doc.file_name)
-    if safe_name != doc.file_name or not _is_safe_jar_name(safe_name):
-        await message.answer("❌ Имя файла содержит недопустимые символы.")
+    os.makedirs(server.mods_dir, exist_ok=True)
+    target = os.path.join(server.mods_dir, safe_name)
+    root = os.path.realpath(server.mods_dir)
+    real_target = os.path.realpath(target)
+    try:
+        inside_mods = os.path.commonpath([root, real_target]) == root
+    except ValueError:
+        inside_mods = False
+    if not inside_mods:
+        await message.answer("❌ Недопустимый путь.")
         return
-
-    os.makedirs(MODS_DIR, exist_ok=True)
-    target = os.path.join(MODS_DIR, safe_name)
     if os.path.lexists(target):
-        await message.answer(
-            f"⚠️ <code>{html.escape(safe_name)}</code> уже существует. "
-            "Удалите старую версию через меню перед загрузкой.",
-            parse_mode="HTML",
-        )
+        await message.answer("⚠️ Такой мод уже существует.")
         return
-
-    status_msg = await message.answer("⏳ Загружаю мод…")
-    fd, temp_path = tempfile.mkstemp(prefix=".upload-", suffix=".tmp", dir=MODS_DIR)
+    status = await message.answer("⏳ Загружаю мод…")
+    fd, temp_path = tempfile.mkstemp(prefix=".upload-", suffix=".tmp", dir=server.mods_dir)
     os.close(fd)
-
     try:
         await message.bot.download(doc, destination=temp_path)
-        # Hard-link creation is atomic and fails instead of following/overwriting a symlink.
         os.link(temp_path, target)
     except FileExistsError:
-        await status_msg.edit_text("❌ Файл с таким именем появился во время загрузки.")
+        await status.edit_text("❌ Файл появился во время загрузки.")
         return
     except Exception as exc:  # noqa: BLE001
-        await status_msg.edit_text(
-            f"❌ Ошибка загрузки: <code>{html.escape(str(exc))}</code>",
-            parse_mode="HTML",
-        )
+        await status.edit_text(f"❌ Ошибка загрузки: <code>{html.escape(str(exc))}</code>", parse_mode="HTML")
         return
     finally:
         try:
             os.remove(temp_path)
         except FileNotFoundError:
             pass
-
-    files = _sorted_jars() or []
-    await status_msg.edit_text(
-        f"✅ Мод <code>{html.escape(safe_name)}</code> загружен.\n"
-        "🔁 Для применения перезапустите сервер.\n\n"
-        + _mods_text(files, message.from_user.id),
-        parse_mode="HTML",
-        reply_markup=mods_list_keyboard(len(files), message.from_user.id),
-    )
+    files = _files(server.mods_dir) or []
+    await status.edit_text(_text(files, message.from_user.id, sid), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), message.from_user.id, sid))

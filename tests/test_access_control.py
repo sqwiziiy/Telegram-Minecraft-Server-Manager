@@ -9,6 +9,7 @@ os.environ.setdefault("ADMIN_IDS", "123456789")
 os.environ.setdefault("RCON_PASSWORD", "test-rcon-password")
 
 from services.access_control import ALL_PERMISSIONS, AccessControl  # noqa: E402
+from config import DEFAULT_SERVER_ID  # noqa: E402
 
 
 class AccessControlTests(unittest.TestCase):
@@ -124,6 +125,40 @@ class AccessControlTests(unittest.TestCase):
 
             self.assertTrue(access.is_authorized(111))
             self.assertFalse(access.is_authorized(222))
+
+    def test_permissions_are_scoped_to_assigned_servers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            users_file = self._write_users(tmp, {"users": {"222": {
+                "name": "Friend",
+                "servers": {
+                    "storm": {"role": "operator", "allow": ["console.use"], "deny": ["server.restart"]},
+                    "create": {"role": "viewer", "allow": [], "deny": []},
+                },
+            }}})
+            access = AccessControl(owner_ids=[111], users_file=users_file)
+            self.assertEqual(access.server_ids_for(222, ["storm", "create", "hidden"]), ["storm", "create"])
+            self.assertTrue(access.can_server(222, "storm", "console.use"))
+            self.assertFalse(access.can_server(222, "storm", "server.restart"))
+            self.assertTrue(access.can_server(222, "create", "server.status"))
+            self.assertFalse(access.can_server(222, "create", "console.use"))
+            self.assertFalse(access.can_server(222, "hidden", "server.status"))
+
+    def test_legacy_policy_only_applies_to_default_server(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            users_file = self._write_users(tmp, {"users": {"222": {"role": "operator"}}})
+            access = AccessControl(owner_ids=[111], users_file=users_file)
+            self.assertTrue(access.can_server(222, DEFAULT_SERVER_ID, "server.start"))
+            self.assertFalse(access.can_server(222, "new-server", "server.start"))
+
+    def test_host_permission_is_global_owner_admin_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            users_file = self._write_users(tmp, {"users": {"222": {
+                "servers": {"storm": {"role": "custom", "allow": ["system.view"], "deny": []}},
+            }}})
+            access = AccessControl(owner_ids=[111], legacy_admin_ids=[333], users_file=users_file)
+            self.assertFalse(access.can_server(222, "storm", "system.view"))
+            self.assertTrue(access.can_system(111))
+            self.assertTrue(access.can_system(333))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # 🎮 Telegram Minecraft Server Manager
 
-Control a Linux Minecraft server from Telegram: start/stop/restart, RCON console, status, mods, backups and selected server events.
+Control all configured Linux Minecraft servers from one Telegram bot: start/stop/restart, RCON console, status, mods, backups and selected server events.
 
 > Built with Python 3.11+ and aiogram 3.x. Minecraft itself does **not** need to be managed by systemd.
 
@@ -8,7 +8,7 @@ Control a Linux Minecraft server from Telegram: start/stop/restart, RCON console
 
 ## Why this project
 
-This is a small self-hosted control panel for a private Minecraft server. The bot runs separately from Minecraft and starts the server process directly from a configured command.
+This is a small self-hosted control panel for private Minecraft servers. The bot runs separately from Minecraft and starts each server process directly from its configured command.
 
 That means you can use your existing launch script:
 
@@ -78,13 +78,9 @@ Minimum useful configuration:
 ```env
 BOT_TOKEN=123456:replace_me
 OWNER_IDS=123456789
-
-SERVER_DIR=/srv/minecraft
-SERVER_START_COMMAND=./start.sh
-
-RCON_HOST=127.0.0.1
-RCON_PORT=25575
-RCON_PASSWORD=replace_me
+MINECRAFT_SERVERS_FILE=./servers.json
+DEFAULT_SERVER_ID=storm-survival
+STORM_SURVIVAL_RCON_PASSWORD=replace_me
 ```
 
 ### Granular access for other users
@@ -109,9 +105,13 @@ Example for a friend who may start, stop and restart the server and **only view 
   "users": {
     "987654321": {
       "name": "Friend",
-      "role": "operator",
-      "allow": [],
-      "deny": []
+      "servers": {
+        "storm-survival": {
+          "role": "operator",
+          "allow": [],
+          "deny": []
+        }
+      }
     }
   }
 }
@@ -188,17 +188,9 @@ The `mcbot` user must have normal filesystem permissions for `SERVER_DIR`, the m
 | --- | --- |
 | `BOT_TOKEN` | Telegram bot token |
 | `OWNER_IDS` | Full-access owner Telegram IDs, comma-separated |\n| `ADMIN_IDS` | Legacy full-access list kept for v1.0 compatibility |\n| `ACCESS_USERS_FILE` | Path to `users.json` with roles and permissions |
-| `SERVER_DIR` | Minecraft working directory |
-| `SERVER_START_COMMAND` | Start command; supports `.sh` directly |
-| `SERVER_PID_FILE` | Managed-process PID metadata |
-| `SERVER_OUTPUT_LOG` | Captured stdout/stderr from the launch process |
-| `SERVER_STOP_TIMEOUT` | Graceful RCON shutdown timeout |
-| `RCON_HOST` / `RCON_PORT` | Minecraft RCON endpoint |
-| `RCON_PASSWORD` | Minecraft RCON password |
-| `MINECRAFT_LOG_PATH` | `latest.log` used for event monitoring |
-| `MODS_DIR` | Mods directory |
-| `WORLD_DIR` | World directory to back up |
-| `BACKUP_DIR` | Backup destination |
+| `MINECRAFT_SERVERS_FILE` | JSON registry containing every server |
+| `DEFAULT_SERVER_ID` | Default server ID; must exist in the registry |
+| `SERVER_*`, `RCON_*`, path variables | Deprecated legacy fallback, used only when the registry is missing/empty |
 | `MAX_MOD_UPLOAD_MB` | Maximum Telegram mod upload size |
 
 ## Security notes
@@ -236,6 +228,16 @@ The `mcbot` user must have normal filesystem permissions for `SERVER_DIR`, the m
 └── .github/workflows/ci.yml
 ```
 
+## Multi-server configuration
+
+All modern servers, including Storm Survival, are configured in `servers.json`. Their RCON secrets stay in `.env` via `rcon_password_env`. PID/output logs, Minecraft logs, mods, world and backup paths default to locations relative to `server_dir`.
+
+One bot presents a server picker and only shows servers assigned to the current Telegram user. Access is configured per server in `users.json`; owners and legacy admins have full access to every configured server. A legacy user entry without `servers` applies only to the default server.
+
+Host CPU/RAM/disk information is global and is available only to owners and legacy admins through the top-level `🖥 Хост` button; it is not granted by access to an individual Minecraft server.
+
+Use unique RCON ports when multiple servers run simultaneously.
+
 ## Current scope
 
-This project is intentionally small and focused on one trusted private server. It is not a multi-tenant hosting panel and should not be exposed as a public bot.
+This project is intentionally small and focused on trusted private servers. It is not a multi-tenant hosting panel and should not be exposed as a public bot.

@@ -7,12 +7,12 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from config import ADMIN_IDS, BOT_TOKEN, JARVIS_API_ENABLED, MINECRAFT_LOG_PATH
+from config import ADMIN_IDS, BOT_TOKEN, JARVIS_API_ENABLED
 from handlers import console, mods, start, status, system
-from keyboards.main_menu import get_main_menu
 from middlewares.auth import AuthMiddleware
 from services.access_control import access_control
 from services.log_monitor import tail_log
+from services.server_registry import server_registry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,22 +36,26 @@ dp.include_router(mods.router)
 dp.include_router(system.router)
 
 
-async def _log_monitor_task() -> None:
+async def _monitor_server(server) -> None:
     while True:
         try:
-            async for line in tail_log(MINECRAFT_LOG_PATH):
+            async for line in tail_log(server.minecraft_log_path):
                 safe_line = html.escape(line)
-                for user_id in access_control.users_with_permission("logs.view"):
+                for user_id in access_control.users_with_server_permission(server.server_id, "logs.view"):
                     try:
-                        await bot.send_message(user_id, f"📋 <code>{safe_line}</code>")
+                        await bot.send_message(user_id, f"📋 <b>{html.escape(server.server_name)}</b> · <code>{safe_line}</code>")
                     except Exception as send_exc:  # noqa: BLE001
                         logger.warning("Failed to send log line to user %s: %s", user_id, send_exc)
         except FileNotFoundError:
-            logger.warning("Minecraft log not found: %s; retrying in 15s", MINECRAFT_LOG_PATH)
+            logger.warning("Minecraft log not found for %s: %s; retrying in 15s", server.server_id, server.minecraft_log_path)
             await asyncio.sleep(15)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Log monitor failed: %s", exc)
             await asyncio.sleep(10)
+
+
+async def _log_monitor_task() -> None:
+    await asyncio.gather(*(_monitor_server(server) for server in server_registry.list()))
 
 
 async def _on_startup() -> None:
@@ -61,8 +65,7 @@ async def _on_startup() -> None:
             await bot.send_message(
                 admin_id,
                 "✅ <b>Minecraft Server Manager запущен.</b>\n"
-                "Управление сервером доступно из меню ниже.",
-                reply_markup=get_main_menu(admin_id),
+                "Выберите сервер через /start.",
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to notify admin %s: %s", admin_id, exc)

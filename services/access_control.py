@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from config import ACCESS_USERS_FILE, LEGACY_ADMIN_IDS, OWNER_IDS
+from config import ACCESS_USERS_FILE, DEFAULT_SERVER_ID, LEGACY_ADMIN_IDS, OWNER_IDS
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ class UserAccess:
     role: str
     allow: frozenset[str]
     deny: frozenset[str]
+    servers: dict[str, "UserAccess"] | None = None
 
 
 class AccessControl:
@@ -117,21 +118,49 @@ class AccessControl:
                 logger.warning("Ignoring malformed access entry for Telegram id %r", raw_id)
                 continue
 
-            role = raw_user.get("role", "custom")
-            if not isinstance(role, str) or role not in ROLE_PERMISSIONS:
-                logger.warning("Ignoring access entry %s with unknown role %r", user_id, role)
-                continue
-
             name = raw_user.get("name", "")
             if not isinstance(name, str):
                 name = ""
 
+            def parse_access(raw: object, *, default_role: str = "custom") -> UserAccess | None:
+                if not isinstance(raw, dict):
+                    return None
+                role = raw.get("role", default_role)
+                if not isinstance(role, str) or role not in ROLE_PERMISSIONS:
+                    logger.warning("Ignoring access entry %s with unknown role %r", user_id, role)
+                    return None
+                return UserAccess(
+                    user_id=user_id,
+                    name=name.strip(),
+                    role=role,
+                    allow=self._known_permissions(raw.get("allow", [])),
+                    deny=self._known_permissions(raw.get("deny", [])),
+                )
+
+            raw_servers = raw_user.get("servers")
+            if isinstance(raw_servers, dict):
+                server_access: dict[str, UserAccess] = {}
+                for raw_server_id, raw_policy in raw_servers.items():
+                    if not isinstance(raw_server_id, str) or not raw_server_id.strip():
+                        continue
+                    policy = parse_access(raw_policy)
+                    if policy is not None:
+                        server_access[raw_server_id.strip()] = policy
+                # A server-map user is valid even when all entries are malformed,
+                # but malformed policies grant no permissions.
+                users[user_id] = UserAccess(
+                    user_id=user_id, name=name.strip(), role="custom",
+                    allow=frozenset(), deny=frozenset(), servers=server_access,
+                )
+                continue
+
+            legacy = parse_access(raw_user, default_role="custom")
+            if legacy is None:
+                continue
+
             users[user_id] = UserAccess(
-                user_id=user_id,
-                name=name.strip(),
-                role=role,
-                allow=self._known_permissions(raw_user.get("allow", [])),
-                deny=self._known_permissions(raw_user.get("deny", [])),
+                user_id=legacy.user_id, name=legacy.name, role=legacy.role,
+                allow=legacy.allow, deny=legacy.deny,
             )
 
         self._users = users
@@ -147,11 +176,24 @@ class AccessControl:
         )
 
     def permissions_for(self, user_id: int) -> frozenset[str]:
+        return self.permissions_for_server(user_id, DEFAULT_SERVER_ID)
+
+    def permissions_for_server(self, user_id: int, server_id: str) -> frozenset[str]:
         if user_id in self.owner_ids or user_id in self.legacy_admin_ids:
             return ALL_PERMISSIONS
 
         user = self._users.get(user_id)
         if user is None:
+            return frozenset()
+
+        if user.servers is not None:
+            policy = user.servers.get(server_id)
+            if policy is None:
+                return frozenset()
+            user = policy
+        elif server_id != DEFAULT_SERVER_ID:
+            # v1.0 policies were global, but granting them to newly added
+            # servers would be an unsafe privilege expansion.
             return frozenset()
 
         permissions = set(ROLE_PERMISSIONS[user.role])
@@ -160,9 +202,24 @@ class AccessControl:
         return frozenset(permissions)
 
     def can(self, user_id: int, permission: str) -> bool:
+        return self.can_server(user_id, DEFAULT_SERVER_ID, permission)
+
+    def can_server(self, user_id: int, server_id: str, permission: str) -> bool:
         if permission not in ALL_PERMISSIONS:
             return False
-        return permission in self.permissions_for(user_id)
+        if permission == "system.view":
+            return self.can_system(user_id)
+        return permission in self.permissions_for_server(user_id, server_id)
+
+    def can_system(self, user_id: int) -> bool:
+        """Host information is global and restricted to owners/admins."""
+        return user_id in self.owner_ids or user_id in self.legacy_admin_ids
+
+    def server_ids_for(self, user_id: int, available_server_ids: Iterable[str]) -> list[str]:
+        return [
+            server_id for server_id in available_server_ids
+            if self.permissions_for_server(user_id, server_id)
+        ]
 
     def users_with_permission(self, permission: str) -> frozenset[int]:
         if permission not in ALL_PERMISSIONS:
@@ -173,6 +230,16 @@ class AccessControl:
             user_id
             for user_id in self._users
             if self.can(user_id, permission)
+        )
+        return frozenset(result)
+
+    def users_with_server_permission(self, server_id: str, permission: str) -> frozenset[int]:
+        if permission not in ALL_PERMISSIONS:
+            return frozenset()
+        result = set(self.owner_ids) | set(self.legacy_admin_ids)
+        result.update(
+            user_id for user_id in self._users
+            if self.can_server(user_id, server_id, permission)
         )
         return frozenset(result)
 

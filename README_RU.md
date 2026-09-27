@@ -1,6 +1,6 @@
 # 🎮 Telegram Minecraft Server Manager
 
-Небольшая self-hosted панель для управления Minecraft-сервером прямо из Telegram: запуск, остановка, рестарт, RCON-консоль, статус, моды, бэкапы и события из логов.
+Небольшая self-hosted панель для управления всеми настроенными Minecraft-серверами из одного Telegram-бота: запуск, остановка, рестарт, RCON-консоль, статус, моды, бэкапы и события из логов.
 
 > Python 3.11+ · aiogram 3.x. Сам Minecraft **не обязан** работать через systemd.
 
@@ -78,13 +78,9 @@ nano .env
 ```env
 BOT_TOKEN=123456:replace_me
 OWNER_IDS=123456789
-
-SERVER_DIR=/srv/minecraft
-SERVER_START_COMMAND=./start.sh
-
-RCON_HOST=127.0.0.1
-RCON_PORT=25575
-RCON_PASSWORD=replace_me
+MINECRAFT_SERVERS_FILE=./servers.json
+DEFAULT_SERVER_ID=storm-survival
+STORM_SURVIVAL_RCON_PASSWORD=replace_me
 ```
 
 ### Гибкий доступ для других пользователей
@@ -109,9 +105,13 @@ nano users.json
   "users": {
     "987654321": {
       "name": "Friend",
-      "role": "operator",
-      "allow": [],
-      "deny": []
+      "servers": {
+        "storm-survival": {
+          "role": "operator",
+          "allow": [],
+          "deny": []
+        }
+      }
     }
   }
 }
@@ -188,17 +188,9 @@ WantedBy=multi-user.target
 | --- | --- |
 | `BOT_TOKEN` | Токен Telegram-бота |
 | `OWNER_IDS` | Telegram ID владельцев с полным доступом |\n| `ADMIN_IDS` | Legacy-список полного доступа для совместимости с v1.0 |\n| `ACCESS_USERS_FILE` | Путь к `users.json` с ролями и permissions |
-| `SERVER_DIR` | Рабочая папка Minecraft |
-| `SERVER_START_COMMAND` | Команда запуска, включая `.sh` |
-| `SERVER_PID_FILE` | PID + metadata управляемого процесса |
-| `SERVER_OUTPUT_LOG` | stdout/stderr процесса запуска |
-| `SERVER_STOP_TIMEOUT` | Сколько ждать graceful stop через RCON |
-| `RCON_HOST`, `RCON_PORT` | RCON endpoint |
-| `RCON_PASSWORD` | RCON пароль |
-| `MINECRAFT_LOG_PATH` | Путь к `latest.log` |
-| `MODS_DIR` | Папка модов |
-| `WORLD_DIR` | Мир для бэкапа |
-| `BACKUP_DIR` | Папка бэкапов |
+| `MINECRAFT_SERVERS_FILE` | JSON-реестр всех серверов |
+| `DEFAULT_SERVER_ID` | ID сервера по умолчанию; должен быть в реестре |
+| `SERVER_*`, `RCON_*` и переменные путей | Устаревший fallback, только если реестр отсутствует/пуст |
 | `MAX_MOD_UPLOAD_MB` | Максимальный размер загружаемого мода |
 
 ## Безопасность
@@ -236,6 +228,14 @@ WantedBy=multi-user.target
 └── .github/workflows/ci.yml
 ```
 
+## Несколько серверов
+
+Все современные серверы, включая Storm Survival, задаются в `servers.json`. Секреты RCON остаются только в `.env` и подключаются через `rcon_password_env`. Пути PID, логов, модов, мира и бэкапов можно указать явно или получить относительно `server_dir`.
+
+Один бот показывает пользователю только назначенные ему серверы. Права в `users.json` задаются внутри `servers`; владельцы и legacy-администраторы имеют полный доступ ко всем серверам. Старый профиль без `servers` действует только для сервера по умолчанию. При одновременном запуске нескольких серверов используйте уникальные RCON-порты.
+
+Информация о CPU/RAM/диске хоста глобальна и доступна только владельцам и legacy-администраторам через кнопку `🖥 Хост`; доступ к отдельному Minecraft-серверу её не выдаёт.
+
 ## Границы проекта
 
-Это менеджер одного доверенного приватного сервера, а не публичная multi-user hosting-панель. Бота не стоит открывать для незнакомых пользователей.
+Это менеджер доверенных приватных серверов, а не публичная multi-user hosting-панель. Бота не стоит открывать для незнакомых пользователей.
