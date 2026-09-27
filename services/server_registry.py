@@ -64,6 +64,8 @@ class ServerRegistry:
         self._default_server_id = DEFAULT_SERVER_ID
 
         path = Path(MINECRAFT_SERVERS_FILE)
+        using_legacy_fallback = False
+
         if path.exists():
             loaded = self._load_json_servers(path)
             if not loaded:
@@ -72,16 +74,22 @@ class ServerRegistry:
                     "single-server environment configuration",
                     path,
                 )
-                self._add(self._legacy_server())
+                legacy = self._legacy_server()
+                self._add(legacy)
+                self._default_server_id = legacy.server_id
+                using_legacy_fallback = True
         else:
             logger.warning(
                 "Minecraft servers file %s is missing; using deprecated single-server "
                 "environment configuration",
                 path,
             )
-            self._add(self._legacy_server())
+            legacy = self._legacy_server()
+            self._add(legacy)
+            self._default_server_id = legacy.server_id
+            using_legacy_fallback = True
 
-        if self._default_server_id not in self._servers:
+        if not using_legacy_fallback and self._default_server_id not in self._servers:
             raise RuntimeError(
                 f"DEFAULT_SERVER_ID={self._default_server_id!r} is not present in the server registry"
             )
