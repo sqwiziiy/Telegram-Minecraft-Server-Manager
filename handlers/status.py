@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery
 from keyboards.inline import server_home_keyboard
 from middlewares.auth import deny_access
 from services.access_control import access_control
-from services.telegram_context import resolve_server
+from services.telegram_context import resolve_server, safe_edit_text
 
 router = Router()
 
@@ -37,7 +37,12 @@ async def _show_status(callback: CallbackQuery, server_id: str, state: FSMContex
         return
     if state is not None:
         await state.clear()
-    await callback.message.edit_text(await _status_text(server), parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
+    await safe_edit_text(
+        callback.message,
+        await _status_text(server),
+        parse_mode="HTML",
+        reply_markup=server_home_keyboard(server, callback.from_user.id),
+    )
     await callback.answer()
 
 

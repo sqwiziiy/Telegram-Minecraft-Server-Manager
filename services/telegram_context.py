@@ -1,3 +1,4 @@
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 
 from services.access_control import access_control
@@ -11,6 +12,16 @@ def resolve_server(server_id: object) -> ManagedServer | None:
         return server_registry.get(server_id)
     except KeyError:
         return None
+
+
+async def safe_edit_text(message, text: str, **kwargs):
+    """Edit a Telegram message, ignoring only the harmless no-op edit error."""
+    try:
+        return await message.edit_text(text, **kwargs)
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            return None
+        raise
 
 
 async def selected_server(state: FSMContext, user_id: int, permission: str | None = None) -> ManagedServer | None:

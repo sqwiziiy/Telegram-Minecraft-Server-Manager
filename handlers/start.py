@@ -8,7 +8,7 @@ from keyboards.inline import server_home_keyboard, server_list_keyboard
 from middlewares.auth import deny_access
 from services.access_control import access_control
 from services.server_registry import server_registry
-from services.telegram_context import resolve_server
+from services.telegram_context import resolve_server, safe_edit_text
 
 router = Router()
 
@@ -45,7 +45,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 async def server_list_callback(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     text, markup = await _server_picker(callback.from_user.id)
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
+    await safe_edit_text(callback.message, text, parse_mode="HTML", reply_markup=markup)
     await callback.answer()
 
 
