@@ -241,3 +241,15 @@ Use unique RCON ports when multiple servers run simultaneously.
 ## Current scope
 
 This project is intentionally small and focused on trusted private servers. It is not a multi-tenant hosting panel and should not be exposed as a public bot.
+
+
+## Jarvis read-only file inspection
+
+The Jarvis control API can browse files inside each configured Minecraft server root without exposing arbitrary host paths:
+
+- `minecraft_list_files` lists directories such as `logs`, `crash-reports`, `mods`, and `config`.
+- `minecraft_read_file` reads text files and transparently decompresses gzip text such as rotated `.log.gz` files.
+- Paths are resolved against the configured `server_dir`; traversal and symlink escapes outside that directory are rejected.
+- Common credential/key files are blocked, and obvious password/token/secret assignment lines are redacted from returned text.
+
+This lets Jarvis inspect crash reports and rotated logs directly before asking the user to upload anything.
