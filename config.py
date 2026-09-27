@@ -13,6 +13,13 @@ def _required(name: str) -> str:
     return value
 
 
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 BOT_TOKEN: str = _required("BOT_TOKEN")
 
 _raw_ids = os.getenv("ADMIN_IDS", "")
@@ -44,3 +51,17 @@ MODS_DIR: str = os.getenv("MODS_DIR", str(Path(SERVER_DIR) / "mods"))
 WORLD_DIR: str = os.getenv("WORLD_DIR", str(Path(SERVER_DIR) / "world"))
 BACKUP_DIR: str = os.getenv("BACKUP_DIR", str(Path(SERVER_DIR) / "backups"))
 MAX_MOD_UPLOAD_MB: int = max(1, int(os.getenv("MAX_MOD_UPLOAD_MB", "100")))
+
+# ===== Optional Jarvis / Open WebUI control API =====
+JARVIS_API_ENABLED: bool = _bool_env("JARVIS_API_ENABLED", False)
+JARVIS_API_HOST: str = os.getenv("JARVIS_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
+JARVIS_API_PORT: int = int(os.getenv("JARVIS_API_PORT", "8765"))
+JARVIS_API_TOKEN: str = os.getenv("JARVIS_API_TOKEN", "").strip()
+
+if not 1 <= JARVIS_API_PORT <= 65535:
+    raise RuntimeError("JARVIS_API_PORT must be between 1 and 65535")
+
+if JARVIS_API_ENABLED and len(JARVIS_API_TOKEN) < 32:
+    raise RuntimeError(
+        "JARVIS_API_TOKEN must be at least 32 characters when JARVIS_API_ENABLED=true"
+    )
