@@ -1,7 +1,10 @@
 import asyncio
+import gzip
 import logging
 import secrets
 from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
@@ -12,6 +15,10 @@ from config import JARVIS_API_HOST, JARVIS_API_PORT, JARVIS_API_TOKEN
 from services.server_registry import ManagedServer, server_registry
 
 logger = logging.getLogger(__name__)
+
+MAX_FILE_READ_BYTES = 2 * 1024 * 1024
+MAX_FILE_READ_CHARS = 500_000
+MAX_FILE_LIST_ENTRIES = 500
 
 app = FastAPI(
     title="Minecraft Server Manager Control API",
@@ -82,6 +89,124 @@ async def _status_payload(server: ManagedServer, *, include_players: bool = True
         result["players"] = None
 
     return result
+
+
+def _server_root(server: ManagedServer) -> Path:
+    return server.manager.server_dir.resolve()
+
+
+def _safe_server_path(server: ManagedServer, relative_path: str) -> tuple[Path, Path]:
+    root = _server_root(server)
+    raw = (relative_path or ".").strip()
+
+    candidate_input = Path(raw)
+    if candidate_input.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="path must be relative to the Minecraft server directory",
+        )
+
+    candidate = (root / candidate_input).resolve()
+
+    if candidate != root and root not in candidate.parents:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="path escapes the Minecraft server directory",
+        )
+
+    return root, candidate
+
+
+def _display_relative_path(root: Path, path: Path) -> str:
+    relative = path.relative_to(root)
+    text = relative.as_posix()
+    return "." if text == "." else text
+
+
+def _looks_sensitive(path: Path) -> bool:
+    lowered_parts = {part.casefold() for part in path.parts}
+    name = path.name.casefold()
+
+    if ".git" in lowered_parts:
+        return True
+
+    if name in {
+        ".env",
+        "credentials.json",
+        "token.json",
+        "accounts.json",
+    }:
+        return True
+
+    if path.suffix.casefold() in {
+        ".pem",
+        ".key",
+        ".p12",
+        ".pfx",
+        ".jks",
+        ".keystore",
+    }:
+        return True
+
+    return False
+
+
+def _redact_sensitive_lines(text: str) -> str:
+    sensitive_keys = (
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "api-key",
+        "private_key",
+        "private-key",
+    )
+    output = []
+
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        lowered = stripped.casefold()
+
+        separator = "=" if "=" in stripped else ":" if ":" in stripped else None
+        if separator:
+            key = stripped.split(separator, 1)[0].strip().casefold()
+            if any(token in key for token in sensitive_keys):
+                prefix = line[: len(line) - len(stripped)]
+                output.append(f"{prefix}{stripped.split(separator, 1)[0]}{separator}<redacted>")
+                continue
+
+        if lowered.startswith("authorization:"):
+            output.append("Authorization: <redacted>")
+            continue
+
+        output.append(line)
+
+    return "\n".join(output)
+
+
+def _decode_file_content(path: Path) -> str:
+    if path.suffix.casefold() == ".gz":
+        with gzip.open(path, "rb") as handle:
+            data = handle.read(MAX_FILE_READ_BYTES + 1)
+    else:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_FILE_READ_BYTES + 1)
+
+    if len(data) > MAX_FILE_READ_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"file exceeds {MAX_FILE_READ_BYTES} readable bytes",
+        )
+
+    if b"\x00" in data[:8192]:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="binary file cannot be returned as text",
+        )
+
+    return data.decode("utf-8", errors="replace")
 
 
 async def _action_result(action: str, server: ManagedServer | None = None) -> dict:
@@ -160,6 +285,145 @@ async def minecraft_logs(
     return {
         **_identity(server),
         "lines": lines,
+        "content": content,
+    }
+
+
+@app.get(
+    "/v1/minecraft/servers/{server_id}/files",
+    dependencies=[Depends(_require_bearer)],
+    operation_id="minecraft_list_files",
+    summary="List files inside one Minecraft server directory",
+)
+async def minecraft_list_files(
+    server_id: str = Path(description="Stable server id returned by minecraft_list_servers"),
+    path: str = Query(
+        default=".",
+        description=(
+            "Relative directory inside the server root, for example '.', "
+            "'logs', 'crash-reports', 'mods' or 'config'."
+        ),
+    ),
+    recursive: bool = Query(
+        default=False,
+        description="Recursively list descendants below the selected directory.",
+    ),
+    max_entries: int = Query(default=200, ge=1, le=MAX_FILE_LIST_ENTRIES),
+) -> dict:
+    """Browse the configured Minecraft server folder without exposing host paths."""
+    server = _get_server(server_id)
+    root, target = _safe_server_path(server, path)
+
+    if not target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="path does not exist",
+        )
+    if not target.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="path is not a directory",
+        )
+
+    iterator = target.rglob("*") if recursive else target.iterdir()
+    entries = []
+
+    for entry in iterator:
+        if len(entries) >= max_entries:
+            break
+
+        try:
+            resolved = entry.resolve()
+            if resolved != root and root not in resolved.parents:
+                continue
+            stat_result = resolved.stat()
+        except (FileNotFoundError, OSError):
+            continue
+
+        entries.append(
+            {
+                "path": _display_relative_path(root, resolved),
+                "name": resolved.name,
+                "type": "directory" if resolved.is_dir() else "file",
+                "size_bytes": stat_result.st_size if resolved.is_file() else None,
+                "modified_at": datetime.fromtimestamp(
+                    stat_result.st_mtime,
+                    tz=timezone.utc,
+                ).isoformat(),
+            }
+        )
+
+    entries.sort(
+        key=lambda item: (
+            item["type"] != "directory",
+            item["path"].casefold(),
+        )
+    )
+
+    return {
+        **_identity(server),
+        "path": _display_relative_path(root, target),
+        "recursive": recursive,
+        "truncated": len(entries) >= max_entries,
+        "entries": entries,
+    }
+
+
+@app.get(
+    "/v1/minecraft/servers/{server_id}/files/read",
+    dependencies=[Depends(_require_bearer)],
+    operation_id="minecraft_read_file",
+    summary="Read a text or gzip-compressed text file from one Minecraft server",
+)
+async def minecraft_read_file(
+    server_id: str = Path(description="Stable server id returned by minecraft_list_servers"),
+    path: str = Query(
+        description=(
+            "Relative file path inside the server root, for example "
+            "'crash-reports/crash-2026-09-27_20.10.00-server.txt' or "
+            "'logs/2026-09-27-3.log.gz'. Gzip text is decompressed automatically."
+        ),
+    ),
+    max_chars: int = Query(default=200_000, ge=1_000, le=MAX_FILE_READ_CHARS),
+) -> dict:
+    """Read diagnostic server files directly, with traversal and secret guards."""
+    server = _get_server(server_id)
+    root, target = _safe_server_path(server, path)
+
+    if not target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="file does not exist",
+        )
+    if not target.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="path is not a file",
+        )
+    if _looks_sensitive(target):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="sensitive file type is not readable through the Jarvis API",
+        )
+
+    try:
+        content = await asyncio.to_thread(_decode_file_content, target)
+    except (OSError, gzip.BadGzipFile) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"failed to read file: {exc}",
+        ) from exc
+
+    content = _redact_sensitive_lines(content)
+    truncated = len(content) > max_chars
+    if truncated:
+        content = content[:max_chars]
+
+    return {
+        **_identity(server),
+        "path": _display_relative_path(root, target),
+        "gzip_decompressed": target.suffix.casefold() == ".gz",
+        "truncated": truncated,
         "content": content,
     }
 
