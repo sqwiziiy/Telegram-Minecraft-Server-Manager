@@ -16,7 +16,7 @@ from config import (
     SERVER_OUTPUT_LOG,
     SERVER_PID_FILE,
     SERVER_START_COMMAND,
-    self.stop_timeout,
+    SERVER_STOP_TIMEOUT,
 )
 from services.rcon import send_rcon_command
 
@@ -48,7 +48,7 @@ class ServerProcessManager:
         start_command: str = SERVER_START_COMMAND,
         pid_file: str = SERVER_PID_FILE,
         output_log: str = SERVER_OUTPUT_LOG,
-        stop_timeout: float = self.stop_timeout,
+        stop_timeout: float = SERVER_STOP_TIMEOUT,
         rcon_host: str | None = None,
         rcon_port: int | None = None,
         rcon_password: str | None = None,
