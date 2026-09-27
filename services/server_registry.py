@@ -61,6 +61,7 @@ class ServerRegistry:
 
     def __init__(self) -> None:
         self._servers: dict[str, ManagedServer] = {}
+        self._default_server_id = DEFAULT_SERVER_ID
 
         path = Path(MINECRAFT_SERVERS_FILE)
         if path.exists():
@@ -80,9 +81,9 @@ class ServerRegistry:
             )
             self._add(self._legacy_server())
 
-        if DEFAULT_SERVER_ID not in self._servers:
+        if self._default_server_id not in self._servers:
             raise RuntimeError(
-                f"DEFAULT_SERVER_ID={DEFAULT_SERVER_ID!r} is not present in the server registry"
+                f"DEFAULT_SERVER_ID={self._default_server_id!r} is not present in the server registry"
             )
 
     def _add(self, server: ManagedServer) -> None:
@@ -214,7 +215,7 @@ class ServerRegistry:
             raise KeyError(f"Unknown Minecraft server {server_id!r}. Known: {known}") from exc
 
     def default(self) -> ManagedServer:
-        return self.get(DEFAULT_SERVER_ID)
+        return self.get(self._default_server_id)
 
 
 server_registry = ServerRegistry()
