@@ -32,22 +32,32 @@ async def _read_packet(reader: asyncio.StreamReader) -> tuple[int, int, str]:
     return req_id, pkt_type, payload
 
 
-async def send_rcon_command(command: str) -> str:
-    if not RCON_PASSWORD:
+async def send_rcon_command(
+    command: str,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    password: str | None = None,
+) -> str:
+    rcon_host = host or RCON_HOST
+    rcon_port = port if port is not None else RCON_PORT
+    rcon_password = RCON_PASSWORD if password is None else password
+
+    if not rcon_password:
         return "❌ RCON_PASSWORD не настроен."
 
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(RCON_HOST, RCON_PORT),
+            asyncio.open_connection(rcon_host, rcon_port),
             timeout=_CONNECT_TIMEOUT,
         )
     except (ConnectionRefusedError, OSError) as exc:
-        return f"❌ RCON недоступен ({RCON_HOST}:{RCON_PORT}): {exc}"
+        return f"❌ RCON недоступен ({rcon_host}:{rcon_port}): {exc}"
     except asyncio.TimeoutError:
         return "❌ Таймаут подключения к RCON."
 
     try:
-        writer.write(_pack(1, _TYPE_AUTH, RCON_PASSWORD))
+        writer.write(_pack(1, _TYPE_AUTH, rcon_password))
         await writer.drain()
         req_id, _, _ = await _read_packet(reader)
         if req_id == -1:
