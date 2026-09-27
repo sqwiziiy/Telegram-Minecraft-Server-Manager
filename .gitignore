@@ -3,3 +3,5 @@ __pycache__/
 users.json
 handlers/__pycache__/
 nohup.out
+
+servers.json
