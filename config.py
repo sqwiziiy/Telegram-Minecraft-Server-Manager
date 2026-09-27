@@ -66,6 +66,13 @@ SERVER_DIR: str = os.getenv("SERVER_DIR", "/opt/minecraft")
 # multiple manager instances control different Minecraft servers.
 SERVER_ID: str = os.getenv("SERVER_ID", "minecraft").strip() or "minecraft"
 SERVER_NAME: str = os.getenv("SERVER_NAME", "Minecraft Server").strip() or "Minecraft Server"
+
+_servers_file = Path(os.getenv("MINECRAFT_SERVERS_FILE", "servers.json")).expanduser()
+if not _servers_file.is_absolute():
+    _servers_file = PROJECT_DIR / _servers_file
+MINECRAFT_SERVERS_FILE: str = str(_servers_file.resolve())
+
+DEFAULT_SERVER_ID: str = os.getenv("DEFAULT_SERVER_ID", SERVER_ID).strip() or SERVER_ID
 SERVER_START_COMMAND: str = os.getenv("SERVER_START_COMMAND", "./start.sh").strip()
 SERVER_PID_FILE: str = os.getenv(
     "SERVER_PID_FILE",
