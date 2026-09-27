@@ -7,7 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from config import ADMIN_IDS, BOT_TOKEN, MINECRAFT_LOG_PATH
+from config import ADMIN_IDS, BOT_TOKEN, JARVIS_API_ENABLED, MINECRAFT_LOG_PATH
 from handlers import console, mods, start, status, system
 from keyboards.main_menu import get_main_menu
 from middlewares.auth import AuthMiddleware
@@ -80,15 +80,35 @@ async def main() -> None:
     dp.startup.register(_on_startup)
     dp.shutdown.register(_on_shutdown)
 
-    log_task = asyncio.create_task(_log_monitor_task(), name="log_monitor")
+    tasks = [
+        asyncio.create_task(_log_monitor_task(), name="log_monitor"),
+    ]
+
+    if JARVIS_API_ENABLED:
+        from services.control_api import run_control_api
+
+        tasks.append(
+            asyncio.create_task(run_control_api(), name="jarvis_control_api")
+        )
+    else:
+        logger.info("Jarvis control API is disabled")
+
     try:
         await dp.start_polling(bot, skip_updates=True)
     finally:
-        log_task.cancel()
-        try:
-            await log_task
-        except asyncio.CancelledError:
-            pass
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Background task %s stopped with error: %s",
+                    task.get_name(),
+                    exc,
+                )
         await bot.session.close()
 
 
