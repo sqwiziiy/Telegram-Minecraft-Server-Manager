@@ -193,4 +193,9 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
         except FileNotFoundError:
             pass
     files = _files(server.mods_dir) or []
-    await status.edit_text(_text(files, message.from_user.id, sid), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), message.from_user.id, sid))
+    await status.edit_text(
+        f"✅ <code>{html.escape(safe_name)}</code> загружен.\n\n"
+        f"{_text(files, message.from_user.id, sid)}",
+        parse_mode="HTML",
+        reply_markup=mods_list_keyboard(len(files), message.from_user.id, sid),
+    )

@@ -155,7 +155,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-После этого Minecraft запускается через Telegram → **⚙️ Система** → **▶️ Запустить**.
+После этого Minecraft запускается через Telegram → **/start** → выбрать сервер → **⚙️ Управление** → **▶️ Запустить**.
 
 ## systemd для самого бота
 
@@ -180,7 +180,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Пользователю `mcbot` нужны обычные права на `SERVER_DIR`, папку модов, мира, бэкапов и файлы PID/логов. Passwordless sudo для управления Minecraft больше не нужен.
+В современном режиме пользователю `mcbot` нужны обычные права на `server_dir`, папки модов, мира, бэкапов, Minecraft/manager-логи и PID-файлы каждого сервера из `servers.json`. Legacy fallback использует соответствующие старые пути из `.env`. Passwordless sudo для управления Minecraft больше не нужен.
 
 ## Переменные окружения
 

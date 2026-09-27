@@ -24,7 +24,10 @@ class ServerRegistryTests(unittest.TestCase):
             ]}
             config_path = root / "servers.json"
             config_path.write_text(json.dumps(payload), encoding="utf-8")
-            with patch.object(registry_module, "MINECRAFT_SERVERS_FILE", str(config_path)):
+            with (
+                patch.object(registry_module, "MINECRAFT_SERVERS_FILE", str(config_path)),
+                patch.object(registry_module, "DEFAULT_SERVER_ID", "storm-survival"),
+            ):
                 registry = registry_module.ServerRegistry()
             self.assertEqual([s.server_id for s in registry.list()], ["storm-survival", "create", "vanilla"])
             self.assertEqual(registry.default().server_id, "storm-survival")
@@ -95,7 +98,10 @@ class ServerRegistryTests(unittest.TestCase):
             path.write_text(json.dumps({"servers": [{
                 "id": "storm-survival", "name": "Storm", "server_dir": tmp,
             }]}), encoding="utf-8")
-            with patch.object(registry_module, "MINECRAFT_SERVERS_FILE", str(path)):
+            with (
+                patch.object(registry_module, "MINECRAFT_SERVERS_FILE", str(path)),
+                patch.object(registry_module, "DEFAULT_SERVER_ID", "storm-survival"),
+            ):
                 registry = registry_module.ServerRegistry()
             self.assertEqual(registry.list()[0].server_id, "storm-survival")
 

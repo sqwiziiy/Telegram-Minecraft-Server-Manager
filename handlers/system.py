@@ -21,6 +21,17 @@ _ACTION_LABELS = {
     "stop": ("⏹", "остановить", "server.stop"),
     "restart": ("🔁", "перезапустить", "server.restart"),
 }
+_ACTION_RESULT_MESSAGES = {
+    "started": "✅ Сервер запущен.",
+    "already_running": "ℹ️ Сервер уже запущен.",
+    "stopped": "✅ Сервер остановлен.",
+    "already_stopped": "ℹ️ Сервер уже остановлен.",
+    "killed": "⚠️ Сервер не завершился вовремя и был принудительно остановлен.",
+}
+
+
+def action_result_message(result: str) -> str:
+    return _ACTION_RESULT_MESSAGES.get(result, f"✅ Готово: {html.escape(result)}")
 
 
 def _action_parts(data: str, prefix: str) -> tuple[str, str] | None:
@@ -98,8 +109,9 @@ async def execute_action(callback: CallbackQuery) -> None:
         logger.exception("Server action failed")
         await callback.message.edit_text(f"❌ <code>{html.escape(str(exc))}</code>", parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
         return
-    messages = {"started": "✅ Сервер запущен.", "already_running": "ℹ️ Сервер уже запущен.", "stopped": "✅ Сервер остановлен.", "already_stopped": "ℹ️ Сервер уже остановлен.", "killed": "⚠️ Сервер принудительно остановлен."}
-    await callback.message.edit_text(await _home_text(server), parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
+    result_message = action_result_message(result)
+    home_text = await _home_text(server)
+    await callback.message.edit_text(f"{result_message}\n\n{home_text}", parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
     logger.info("Server action %s completed with %s", action, result)
 
 

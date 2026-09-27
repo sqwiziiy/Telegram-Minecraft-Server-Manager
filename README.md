@@ -155,7 +155,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-The Minecraft server is then started from Telegram → **⚙️ System** → **▶️ Start**.
+The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**.
 
 ## Running the bot with systemd
 
@@ -180,7 +180,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-The `mcbot` user must have normal filesystem permissions for `SERVER_DIR`, the mods directory, world directory, backup directory and manager log/PID files. It does not need passwordless sudo just to control Minecraft.
+In modern mode, the `mcbot` user must have normal filesystem permissions for every configured server's `server_dir`, mods, world, backups, Minecraft/manager logs and PID file paths from `servers.json`. The legacy `.env` fallback uses the corresponding legacy paths. It does not need passwordless sudo just to control Minecraft.
 
 ## Configuration
 

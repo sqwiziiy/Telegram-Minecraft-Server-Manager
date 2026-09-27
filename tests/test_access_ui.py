@@ -9,9 +9,14 @@ os.environ.setdefault("RCON_PASSWORD", "test-rcon-password")
 
 from keyboards.inline import server_home_keyboard  # noqa: E402
 from services.access_control import access_control  # noqa: E402
+from handlers.system import action_result_message  # noqa: E402
 
 
 class AccessUiTests(unittest.TestCase):
+    def test_action_result_message_preserves_killed_warning(self) -> None:
+        self.assertIn("принудительно", action_result_message("killed"))
+        self.assertIn("Готово", action_result_message("unexpected"))
+
     def test_server_home_hides_unpermitted_actions(self) -> None:
         server = SimpleNamespace(server_id="storm", server_name="Storm")
         allowed = {"server.status", "mods.view"}
