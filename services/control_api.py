@@ -6,7 +6,13 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from config import JARVIS_API_HOST, JARVIS_API_PORT, JARVIS_API_TOKEN
+from config import (
+    JARVIS_API_HOST,
+    JARVIS_API_PORT,
+    JARVIS_API_TOKEN,
+    SERVER_ID,
+    SERVER_NAME,
+)
 from services.rcon import send_rcon_command
 from services.server_process import server_process_manager
 
@@ -24,6 +30,13 @@ app = FastAPI(
 )
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def _server_identity() -> dict[str, str]:
+    return {
+        "server_id": SERVER_ID,
+        "server_name": SERVER_NAME,
+    }
 
 
 def _require_bearer(
@@ -56,6 +69,7 @@ async def minecraft_status() -> dict:
     """Return managed-process state and the current Minecraft player list when available."""
     process = await server_process_manager.status()
     result = asdict(process)
+    result.update(_server_identity())
 
     if process.running:
         result["players"] = await send_rcon_command("list")
@@ -76,7 +90,11 @@ async def minecraft_logs(
 ) -> dict[str, str | int]:
     """Read the last 1-100 lines captured from the managed Minecraft process."""
     content = await server_process_manager.tail_output(lines)
-    return {"lines": lines, "content": content}
+    return {
+        **_server_identity(),
+        "lines": lines,
+        "content": content,
+    }
 
 
 async def _action_result(action: str) -> dict:
@@ -91,6 +109,7 @@ async def _action_result(action: str) -> dict:
 
     current = await server_process_manager.status()
     payload = asdict(current)
+    payload.update(_server_identity())
     payload["result"] = result
     return payload
 
