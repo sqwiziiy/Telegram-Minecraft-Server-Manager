@@ -1,3 +1,5 @@
 aiogram~=3.7
 psutil~=5.9
 python-dotenv~=1.0
+fastapi>=0.115,<1.0
+uvicorn>=0.34,<1.0
