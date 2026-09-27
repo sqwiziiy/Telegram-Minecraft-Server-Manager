@@ -1,5 +1,8 @@
+import gzip
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -17,8 +20,10 @@ def _server(
     server_name: str = "Storm Survival",
     running: bool = True,
     rcon_configured: bool = True,
+    server_dir: str | None = None,
 ):
     manager = SimpleNamespace(
+        server_dir=Path(server_dir or ".").resolve(),
         status=AsyncMock(
             return_value=ServerStatus(
                 running=running,
@@ -108,6 +113,81 @@ class ControlApiTests(unittest.IsolatedAsyncioTestCase):
                 "content": "latest line",
             },
         )
+
+    async def test_list_files_is_confined_to_server_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "logs").mkdir()
+            (root / "logs" / "latest.log").write_text(
+                "hello",
+                encoding="utf-8",
+            )
+            server = _server(server_dir=tmp)
+
+            with patch.object(
+                control_api.server_registry,
+                "get",
+                return_value=server,
+            ):
+                result = await control_api.minecraft_list_files(
+                    "storm-survival",
+                    path="logs",
+                    recursive=False,
+                    max_entries=20,
+                )
+
+            self.assertEqual(result["path"], "logs")
+            self.assertEqual(len(result["entries"]), 1)
+            self.assertEqual(
+                result["entries"][0]["path"],
+                "logs/latest.log",
+            )
+
+    async def test_read_file_decompresses_gzip_and_redacts_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "logs").mkdir()
+            archive = root / "logs" / "2026-09-27-3.log.gz"
+            with gzip.open(archive, "wt", encoding="utf-8") as handle:
+                handle.write(
+                    "Exception ticking world\n"
+                    "api_token=do-not-return\n"
+                )
+
+            server = _server(server_dir=tmp)
+            with patch.object(
+                control_api.server_registry,
+                "get",
+                return_value=server,
+            ):
+                result = await control_api.minecraft_read_file(
+                    "storm-survival",
+                    path="logs/2026-09-27-3.log.gz",
+                    max_chars=200_000,
+                )
+
+            self.assertTrue(result["gzip_decompressed"])
+            self.assertIn("Exception ticking world", result["content"])
+            self.assertNotIn("do-not-return", result["content"])
+            self.assertIn("<redacted>", result["content"])
+
+    async def test_read_file_rejects_path_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = _server(server_dir=tmp)
+
+            with patch.object(
+                control_api.server_registry,
+                "get",
+                return_value=server,
+            ):
+                with self.assertRaises(control_api.HTTPException) as ctx:
+                    await control_api.minecraft_read_file(
+                        "storm-survival",
+                        path="../outside.log",
+                        max_chars=200_000,
+                    )
+
+            self.assertEqual(ctx.exception.status_code, 403)
 
     async def test_action_targets_selected_server(self) -> None:
         storm = _server()
