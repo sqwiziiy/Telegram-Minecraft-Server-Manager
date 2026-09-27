@@ -61,6 +61,11 @@ RCON_PORT: int = int(os.getenv("RCON_PORT", "25575"))
 RCON_PASSWORD: str = os.getenv("RCON_PASSWORD", "")
 
 SERVER_DIR: str = os.getenv("SERVER_DIR", "/opt/minecraft")
+
+# Stable identity exposed by the Jarvis API. This becomes important when
+# multiple manager instances control different Minecraft servers.
+SERVER_ID: str = os.getenv("SERVER_ID", "minecraft").strip() or "minecraft"
+SERVER_NAME: str = os.getenv("SERVER_NAME", "Minecraft Server").strip() or "Minecraft Server"
 SERVER_START_COMMAND: str = os.getenv("SERVER_START_COMMAND", "./start.sh").strip()
 SERVER_PID_FILE: str = os.getenv(
     "SERVER_PID_FILE",
