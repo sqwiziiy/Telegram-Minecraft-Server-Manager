@@ -44,16 +44,22 @@ class ServerProcessManager:
     def __init__(
         self,
         *,
-        server_dir: str = SERVER_DIR,
-        start_command: str = SERVER_START_COMMAND,
-        pid_file: str = SERVER_PID_FILE,
-        output_log: str = SERVER_OUTPUT_LOG,
-        stop_timeout: float = SERVER_STOP_TIMEOUT,
+        server_dir: str | None = None,
+        start_command: str | None = None,
+        pid_file: str | None = None,
+        output_log: str | None = None,
+        stop_timeout: float | None = None,
         rcon_host: str | None = None,
         rcon_port: int | None = None,
         rcon_password: str | None = None,
     ) -> None:
         self._lock = asyncio.Lock()
+        server_dir = SERVER_DIR if server_dir is None else server_dir
+        start_command = SERVER_START_COMMAND if start_command is None else start_command
+        pid_file = SERVER_PID_FILE if pid_file is None else pid_file
+        output_log = SERVER_OUTPUT_LOG if output_log is None else output_log
+        stop_timeout = SERVER_STOP_TIMEOUT if stop_timeout is None else stop_timeout
+
         self.server_dir = Path(server_dir).expanduser().resolve()
         self.pid_file = Path(pid_file).expanduser().resolve()
         self.output_log = Path(output_log).expanduser().resolve()
