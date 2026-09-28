@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 _LOG_PREFIX_RE = re.compile(
     r"^(?:\[(?P<time>\d{2}:\d{2}:\d{2})\]\s*)?"
     r"(?:\[[^\]]+\]\s*)*"
-    r"(?:\[[^\]]+\]:\s*)?"
-    r"(?P<payload>.*)$"
+    r":?\s*(?P<payload>.*)$"
 )
 _JOIN_RE = re.compile(r"^(?P<player>\S+) joined the game$")
 _LEAVE_RE = re.compile(r"^(?P<player>\S+) left the game$")
