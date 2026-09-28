@@ -12,6 +12,12 @@ All notable changes to this project are documented here.
 - `OWNER_IDS` for full-access owners while keeping legacy `ADMIN_IDS` compatibility.
 - Permission-aware Telegram menus and read-only mod listings.
 - Unit tests for access policy resolution and operator UI visibility.
+- Compact per-server live event feed that keeps the latest 10 join/leave/chat/death events in one editable Telegram message.
+
+### Changed
+
+- Live Minecraft events now edit a single feed message instead of creating a new Telegram message for every event.
+- Event lines are parsed into compact join/leave/chat/death entries while preserving the original death reason.
 
 ### Security
 
