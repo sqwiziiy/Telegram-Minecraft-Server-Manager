@@ -101,10 +101,10 @@ class EventFeedTests(unittest.IsolatedAsyncioTestCase):
             )
 
         text = feed.render("storm", "Storm Survival")
-        self.assertNotIn("Player0", text)
-        self.assertNotIn("Player1", text)
-        self.assertIn("Player2", text)
-        self.assertIn("Player11", text)
+        self.assertNotIn("<b>Player0</b>", text)
+        self.assertNotIn("<b>Player1</b>", text)
+        self.assertIn("<b>Player2</b>", text)
+        self.assertIn("<b>Player11</b>", text)
         self.assertIn("Последние 10 из 10 событий", text)
 
     async def test_html_is_escaped(self) -> None:
