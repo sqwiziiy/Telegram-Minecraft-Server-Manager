@@ -40,12 +40,16 @@ async def _monitor_server(server) -> None:
     while True:
         try:
             async for line in tail_log(server.minecraft_log_path):
-                safe_line = html.escape(line)
-                for user_id in access_control.users_with_server_permission(server.server_id, "logs.view"):
-                    try:
-                        await bot.send_message(user_id, f"📋 <b>{html.escape(server.server_name)}</b> · <code>{safe_line}</code>")
-                    except Exception as send_exc:  # noqa: BLE001
-                        logger.warning("Failed to send log line to user %s: %s", user_id, send_exc)
+                await event_feed.publish_line(
+                    bot,
+                    server_id=server.server_id,
+                    server_name=server.server_name,
+                    line=line,
+                    user_ids=access_control.users_with_server_permission(
+                        server.server_id,
+                        "logs.view",
+                    ),
+                )
         except FileNotFoundError:
             logger.warning("Minecraft log not found for %s: %s; retrying in 15s", server.server_id, server.minecraft_log_path)
             await asyncio.sleep(15)
