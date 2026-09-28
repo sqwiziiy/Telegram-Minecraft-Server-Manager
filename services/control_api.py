@@ -293,7 +293,12 @@ async def minecraft_logs(
     "/v1/minecraft/servers/{server_id}/files",
     dependencies=[Depends(_require_bearer)],
     operation_id="minecraft_list_files",
-    summary="List files inside one Minecraft server directory",
+    summary="Browse Minecraft server files such as crash-reports, logs, mods and config",
+    description=(
+        "Use this for filesystem questions about a configured Minecraft server. "
+        "Prefer this over terminal/workspace file search when the user asks what is "
+        "inside crash-reports, logs, mods, config, world, or another server directory."
+    ),
 )
 async def minecraft_list_files(
     server_id: str = Path(description="Stable server id returned by minecraft_list_servers"),
@@ -373,7 +378,13 @@ async def minecraft_list_files(
     "/v1/minecraft/servers/{server_id}/files/read",
     dependencies=[Depends(_require_bearer)],
     operation_id="minecraft_read_file",
-    summary="Read a text or gzip-compressed text file from one Minecraft server",
+    summary="Read Minecraft crash reports and logs, including .log.gz",
+    description=(
+        "Read a file that belongs to the configured Minecraft server. Use this after "
+        "minecraft_list_files when inspecting crash-reports or logs. Gzip text such as "
+        "rotated .log.gz files is decompressed automatically; do not ask the user to "
+        "upload or unpack a server file that is available here."
+    ),
 )
 async def minecraft_read_file(
     server_id: str = Path(description="Stable server id returned by minecraft_list_servers"),
