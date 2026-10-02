@@ -56,6 +56,14 @@ if not _access_users_path.is_absolute():
     _access_users_path = PROJECT_DIR / _access_users_path
 ACCESS_USERS_FILE: str = str(_access_users_path.resolve())
 
+_auto_stop_state_path = Path(os.getenv("AUTO_STOP_STATE_FILE", "auto_stop_state.json")).expanduser()
+if not _auto_stop_state_path.is_absolute():
+    _auto_stop_state_path = PROJECT_DIR / _auto_stop_state_path
+AUTO_STOP_STATE_FILE: str = str(_auto_stop_state_path.resolve())
+AUTO_STOP_DEFAULT_SECONDS: int = int(os.getenv("AUTO_STOP_DEFAULT_SECONDS", "0"))
+if not 0 <= AUTO_STOP_DEFAULT_SECONDS <= 86400:
+    raise RuntimeError("AUTO_STOP_DEFAULT_SECONDS must be between 0 and 86400")
+
 RCON_HOST: str = os.getenv("RCON_HOST", "127.0.0.1")
 RCON_PORT: int = int(os.getenv("RCON_PORT", "25575"))
 RCON_PASSWORD: str = os.getenv("RCON_PASSWORD", "")
