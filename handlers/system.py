@@ -4,14 +4,15 @@ import logging
 
 import psutil
 from aiogram import Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, FSInputFile
 
 from handlers.start import _home_text, _server_picker
-from keyboards.inline import auto_stop_keyboard, confirm_keyboard, server_home_keyboard
+from keyboards.inline import auto_stop_keyboard, confirm_keyboard, events_keyboard, server_home_keyboard
 from middlewares.auth import deny_access
 from services.access_control import access_control
 from services.auto_stop import auto_stop_manager
 from services.backup import create_backup
+from services.event_history import event_history
 from services.telegram_context import resolve_server
 
 router = Router()
@@ -65,6 +66,31 @@ async def host_info(callback: CallbackQuery) -> None:
 
 def _collect_host_info() -> dict:
     return {"cpu": psutil.cpu_percent(interval=0.3), "ram": psutil.virtual_memory(), "disk": psutil.disk_usage("/")}
+
+
+def _telegram_actor(user) -> str:
+    label = user.full_name or str(user.id)
+    if user.username:
+        label += f" (@{user.username})"
+    return f"{label}, id={user.id}"
+
+
+async def _events_text(server) -> str:
+    process = await server.manager.status()
+    if process.running:
+        state = f"🟢 Работает · аптайм {process.uptime_seconds // 60} мин"
+    else:
+        state = "⚫ Остановлен"
+
+    entries = await event_history.recent(server, limit=20)
+    history = event_history.render(entries)
+    return (
+        f"📋 <b>События · {html.escape(server.server_name)}</b>\n"
+        f"{state}\n"
+        f"🗂 <code>logs/events/YYYY-MM-DD.log</code>\n\n"
+        f"{history}\n\n"
+        f"<i>Последние {len(entries)} событий. История хранится на диске по дням.</i>"
+    )
 
 
 def _duration_text(seconds: int) -> str:
@@ -147,6 +173,12 @@ async def auto_stop_set(callback: CallbackQuery) -> None:
 
     try:
         state = await auto_stop_manager.set_timeout(server, seconds)
+        setting = "выключен" if seconds == 0 else f"{_duration_text(seconds)} без игроков"
+        await event_history.record(
+            server,
+            kind="auto_stop_setting",
+            text=f"Auto-stop: {setting} · Telegram · {_telegram_actor(callback.from_user)}",
+        )
     except ValueError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
@@ -202,6 +234,13 @@ async def execute_action(callback: CallbackQuery) -> None:
     try:
         result = await getattr(server.manager, action)()
         await auto_stop_manager.on_server_action(server, action, result)
+        await event_history.record_action(
+            server,
+            action=action,
+            result=result,
+            source="Telegram",
+            actor=_telegram_actor(callback.from_user),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Server action failed")
         await callback.message.edit_text(f"❌ <code>{html.escape(str(exc))}</code>", parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
@@ -210,6 +249,52 @@ async def execute_action(callback: CallbackQuery) -> None:
     home_text = await _home_text(server)
     await callback.message.edit_text(f"{result_message}\n\n{home_text}", parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
     logger.info("Server action %s completed with %s", action, result)
+
+
+@router.callback_query(
+    lambda c: c.data
+    and (c.data.startswith("events:") or c.data.startswith("events_refresh:"))
+)
+async def server_events(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "events.view"):
+        await deny_access(callback)
+        return
+
+    await callback.message.edit_text(
+        await _events_text(server),
+        parse_mode="HTML",
+        reply_markup=events_keyboard(server_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("events_file:"))
+async def server_events_file(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "events.view"):
+        await deny_access(callback)
+        return
+
+    path = event_history.today_path(server)
+    if not path.is_file():
+        await callback.answer("Сегодня событий ещё нет.", show_alert=True)
+        return
+
+    await callback.answer("📄 Отправляю лог за сегодня")
+    await callback.message.answer_document(
+        FSInputFile(path),
+        caption=f"📋 События · {html.escape(server.server_name)} · сегодня",
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("logs:"))
