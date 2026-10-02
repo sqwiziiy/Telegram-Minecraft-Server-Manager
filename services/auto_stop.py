@@ -100,7 +100,10 @@ class AutoStopManager:
             await asyncio.to_thread(self._write_state_sync)
 
     def timeout_seconds(self, server: "ManagedServer") -> int:
-        return self._overrides.get(server.server_id, int(server.auto_stop_seconds))
+        return self._overrides.get(
+            server.server_id,
+            int(getattr(server, "auto_stop_seconds", 0)),
+        )
 
     def status(self, server: "ManagedServer") -> dict:
         timeout = self.timeout_seconds(server)
