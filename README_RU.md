@@ -1,6 +1,6 @@
 # 🎮 Telegram Minecraft Server Manager
 
-Небольшая self-hosted панель для управления всеми настроенными Minecraft-серверами из одного Telegram-бота: запуск, остановка, рестарт, RCON-консоль, статус, моды, бэкапы и события из логов.
+Небольшая self-hosted панель для управления всеми настроенными Minecraft-серверами из одного Telegram-бота: запуск, остановка, рестарт, RCON-консоль, статус, моды, бэкапы, событийный auto-stop и события из логов. Опциональный HTTP Control API позволяет подключать внешних ботов, ИИ-агентов и автоматизацию.
 
 > Python 3.11+ · aiogram 3.x. Сам Minecraft **не обязан** работать через systemd.
 
@@ -34,6 +34,8 @@ SERVER_START_COMMAND=java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
 | 🧩 Моды | Просмотр, загрузка и удаление `.jar` |
 | 💾 Бэкапы | Согласованный ZIP-бэкап через `save-off` → `save-all flush` → `save-on` |
 | 📜 Логи | Последние строки запуска + уведомления о событиях сервера |
+| ⏱ Auto-stop | Локально выключает пустой сервер после заданного таймаута по событиям входа/выхода |
+| 🔌 Control API | Опциональный HTTP/OpenAPI интерфейс с Bearer auth для ботов, ИИ-агентов и скриптов |
 | 🔐 Доступ | `OWNER_IDS` + роли и отдельные permissions из `users.json` |
 
 ## Как это устроено
@@ -41,14 +43,18 @@ SERVER_START_COMMAND=java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
 ```mermaid
 flowchart LR
     TG[Telegram user] --> BOT[aiogram bot]
-    BOT --> PM[Process manager]
-    BOT --> RCON[RCON]
-    BOT --> MODS[Mods]
-    BOT --> BACKUP[Backup]
+    EXT[Внешний бот / ИИ / скрипт] --> API[Опциональный Control API]
+    BOT --> CORE[Сервисы менеджера]
+    API --> CORE
+    CORE --> PM[Process manager]
+    CORE --> RCON[RCON]
+    CORE --> MODS[Mods]
+    CORE --> BACKUP[Backup]
+    CORE --> AUTO[Auto-stop]
     PM --> MC[Minecraft / start.sh]
     RCON --> MC
     MC --> LOG[latest.log]
-    LOG --> BOT
+    LOG --> CORE
 ```
 
 Process manager сохраняет PID и время создания процесса. Поэтому после перезапуска самого бота он может снова узнать управляемый Minecraft-процесс и не спутать его с другим процессом после PID reuse.
@@ -123,6 +129,7 @@ nano users.json
 - `server.start`
 - `server.stop`
 - `server.restart`
+- `server.autostop`
 - `mods.view`
 
 Консоль, удаление/загрузка модов, логи, системная информация и бэкапы для неё закрыты. Кнопки без прав не показываются, но главное — каждый handler и callback дополнительно проверяет permission на backend.
@@ -155,7 +162,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-После этого Minecraft запускается через Telegram → **/start** → выбрать сервер → **⚙️ Управление** → **▶️ Запустить**.
+После этого Minecraft запускается через Telegram → **/start** → выбрать сервер → **⚙️ Управление** → **▶️ Запустить**. Auto-stop настраивается прямо на экране сервера через **⏱ Auto-stop** и работает независимо от внешнего API и любого ИИ.
 
 ## systemd для самого бота
 
@@ -192,6 +199,11 @@ WantedBy=multi-user.target
 | `DEFAULT_SERVER_ID` | ID сервера по умолчанию; должен быть в реестре |
 | `SERVER_*`, `RCON_*` и переменные путей | Устаревший fallback, только если реестр отсутствует/пуст |
 | `MAX_MOD_UPLOAD_MB` | Максимальный размер загружаемого мода |
+| `AUTO_STOP_STATE_FILE` | Файл сохранённого состояния auto-stop |
+| `AUTO_STOP_DEFAULT_SECONDS` | Таймаут пустого сервера по умолчанию; `0` отключает функцию |
+| `CONTROL_API_ENABLED` | Включить опциональный внешний HTTP Control API |
+| `CONTROL_API_HOST`, `CONTROL_API_PORT` | Адрес и порт Control API |
+| `CONTROL_API_TOKEN` | Bearer-токен для внешних клиентов API |
 
 ## Безопасность
 
@@ -221,10 +233,16 @@ WantedBy=multi-user.target
 ├── middlewares/
 │   └── auth.py
 ├── services/
+│   ├── auto_stop.py
 │   ├── backup.py
+│   ├── control_api.py
+│   ├── event_feed.py
 │   ├── log_monitor.py
 │   ├── rcon.py
-│   └── server_process.py
+│   ├── server_process.py
+│   └── server_registry.py
+├── docs/
+│   └── CONTROL_API.md
 └── .github/workflows/ci.yml
 ```
 
@@ -239,3 +257,26 @@ WantedBy=multi-user.target
 ## Границы проекта
 
 Это менеджер доверенных приватных серверов, а не публичная multi-user hosting-панель. Бота не стоит открывать для незнакомых пользователей.
+
+
+## Опциональный внешний Control API
+
+HTTP API — это **интеграционный слой**, а не обязательная часть работы менеджера.
+Telegram-управление, auto-stop, управление процессами и обработка событий продолжают
+работать, даже если API полностью выключен.
+
+API подходит для **любого доверенного внешнего клиента**: ИИ-ассистента, Open WebUI/Jarvis,
+другого Telegram/Discord-бота, панели, системы автоматизации или локального скрипта.
+OpenAPI-схема содержит стабильные operation ID вроде `minecraft_status`,
+`minecraft_set_auto_stop` и `minecraft_rcon`, поэтому ИИ/agent-клиенты могут
+подключать их как инструменты.
+
+Для диагностики доступны read-only операции чтения crash-reports, логов и других файлов
+внутри каталога Minecraft-сервера. Выход за `server_dir` блокируется, чувствительные
+файлы и очевидные секреты защищены.
+
+Полная документация, разделение READ-ONLY / WRITE, настройка Bearer auth и примеры:
+**[docs/CONTROL_API.md](docs/CONTROL_API.md)**.
+
+Старые переменные `JARVIS_API_*` сохранены для совместимости. Для новых установок
+используйте `CONTROL_API_*`.
