@@ -1,5 +1,4 @@
 import asyncio
-import html
 import logging
 
 from aiogram import Bot, Dispatcher
@@ -10,7 +9,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from config import ADMIN_IDS, BOT_TOKEN, CONTROL_API_ENABLED
 from handlers import console, mods, start, status, system
 from middlewares.auth import AuthMiddleware
-from services.access_control import access_control
 from services.auto_stop import auto_stop_manager
 from services.event_history import event_history
 from services.log_monitor import tail_log
@@ -56,41 +54,18 @@ async def _log_monitor_task() -> None:
     await asyncio.gather(*(_monitor_server(server) for server in server_registry.list()))
 
 
-async def _notify_auto_stop(server, timeout_seconds: int, result: str) -> None:
+async def _record_auto_stop(server, timeout_seconds: int, result: str) -> None:
+    """Persist auto-stop in the server event history without sending chat spam."""
     await event_history.record_auto_stop(
         server,
         timeout_seconds=timeout_seconds,
         result=result,
     )
 
-    if timeout_seconds % 60 == 0:
-        duration = f"{timeout_seconds // 60} мин"
-    else:
-        duration = f"{timeout_seconds} сек"
-
-    text = (
-        f"🌙 <b>{html.escape(server.server_name)} автоматически выключен.</b>\n"
-        f"Причина: сервер был пуст {duration}.\n"
-        f"Результат: <code>{html.escape(result)}</code>"
-    )
-    for user_id in access_control.users_with_server_permission(
-        server.server_id,
-        "server.stop",
-    ):
-        try:
-            await bot.send_message(user_id, text)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Failed to send auto-stop notification to %s for %s: %s",
-                user_id,
-                server.server_id,
-                exc,
-            )
-
 
 async def _on_startup() -> None:
     logger.info("Bot started. Full-access users: %s", ADMIN_IDS)
-    auto_stop_manager.set_notifier(_notify_auto_stop)
+    auto_stop_manager.set_notifier(_record_auto_stop)
     servers = server_registry.list()
     await auto_stop_manager.bootstrap(servers)
     for server in servers:
