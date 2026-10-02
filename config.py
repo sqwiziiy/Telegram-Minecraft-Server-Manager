@@ -103,16 +103,48 @@ WORLD_DIR: str = os.getenv("WORLD_DIR", str(Path(SERVER_DIR) / "world"))
 BACKUP_DIR: str = os.getenv("BACKUP_DIR", str(Path(SERVER_DIR) / "backups"))
 MAX_MOD_UPLOAD_MB: int = max(1, int(os.getenv("MAX_MOD_UPLOAD_MB", "100")))
 
-# ===== Optional Jarvis / Open WebUI control API =====
-JARVIS_API_ENABLED: bool = _bool_env("JARVIS_API_ENABLED", False)
-JARVIS_API_HOST: str = os.getenv("JARVIS_API_HOST", "127.0.0.1").strip() or "127.0.0.1"
-JARVIS_API_PORT: int = int(os.getenv("JARVIS_API_PORT", "8765"))
-JARVIS_API_TOKEN: str = os.getenv("JARVIS_API_TOKEN", "").strip()
+# ===== Optional external Control API =====
+# CONTROL_API_* is the generic v1.1+ naming. Existing JARVIS_API_* settings are
+# still accepted so current Jarvis/Open WebUI installations keep working.
+def _api_env(primary: str, legacy: str, default: str = "") -> str:
+    value = os.getenv(primary)
+    if value is not None:
+        return value.strip()
+    return os.getenv(legacy, default).strip()
 
-if not 1 <= JARVIS_API_PORT <= 65535:
-    raise RuntimeError("JARVIS_API_PORT must be between 1 and 65535")
 
-if JARVIS_API_ENABLED and len(JARVIS_API_TOKEN) < 32:
+def _api_bool_env(primary: str, legacy: str, default: bool = False) -> bool:
+    value = os.getenv(primary)
+    if value is None:
+        value = os.getenv(legacy)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+CONTROL_API_ENABLED: bool = _api_bool_env(
+    "CONTROL_API_ENABLED", "JARVIS_API_ENABLED", False
+)
+CONTROL_API_HOST: str = (
+    _api_env("CONTROL_API_HOST", "JARVIS_API_HOST", "127.0.0.1")
+    or "127.0.0.1"
+)
+CONTROL_API_PORT: int = int(
+    _api_env("CONTROL_API_PORT", "JARVIS_API_PORT", "8765")
+)
+CONTROL_API_TOKEN: str = _api_env("CONTROL_API_TOKEN", "JARVIS_API_TOKEN")
+
+if not 1 <= CONTROL_API_PORT <= 65535:
+    raise RuntimeError("CONTROL_API_PORT must be between 1 and 65535")
+
+if CONTROL_API_ENABLED and len(CONTROL_API_TOKEN) < 32:
     raise RuntimeError(
-        "JARVIS_API_TOKEN must be at least 32 characters when JARVIS_API_ENABLED=true"
+        "CONTROL_API_TOKEN must be at least 32 characters when CONTROL_API_ENABLED=true"
     )
+
+# Backwards-compatible Python aliases for integrations or local code that still
+# imports the old names.
+JARVIS_API_ENABLED = CONTROL_API_ENABLED
+JARVIS_API_HOST = CONTROL_API_HOST
+JARVIS_API_PORT = CONTROL_API_PORT
+JARVIS_API_TOKEN = CONTROL_API_TOKEN
