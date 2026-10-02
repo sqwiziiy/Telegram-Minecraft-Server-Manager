@@ -3,7 +3,6 @@ import logging
 import os
 from typing import AsyncGenerator
 
-from services.auto_stop import is_server_ready_line
 from services.event_history import parse_minecraft_event
 
 logger = logging.getLogger(__name__)
