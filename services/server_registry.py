@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import (
+    AUTO_STOP_DEFAULT_SECONDS,
     DEFAULT_SERVER_ID,
     BACKUP_DIR,
     MINECRAFT_SERVERS_FILE,
@@ -42,6 +43,7 @@ class ManagedServer:
     mods_dir: str
     world_dir: str
     backup_dir: str
+    auto_stop_seconds: int = 0
 
     @property
     def rcon_configured(self) -> bool:
@@ -128,6 +130,7 @@ class ServerRegistry:
             mods_dir=MODS_DIR,
             world_dir=WORLD_DIR,
             backup_dir=BACKUP_DIR,
+            auto_stop_seconds=AUTO_STOP_DEFAULT_SECONDS,
         )
 
     def _load_json_servers(self, path: Path) -> bool:
@@ -180,6 +183,20 @@ class ServerRegistry:
             password_env = str(raw.get("rcon_password_env", "")).strip()
             rcon_password = os.getenv(password_env, "") if password_env else ""
 
+            try:
+                auto_stop_seconds = int(
+                    raw.get("auto_stop_seconds", AUTO_STOP_DEFAULT_SECONDS)
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"Server {server_id!r} has invalid auto_stop_seconds"
+                ) from exc
+            if not 0 <= auto_stop_seconds <= 86400:
+                raise RuntimeError(
+                    f"Server {server_id!r} has invalid auto_stop_seconds={auto_stop_seconds}; "
+                    "expected 0..86400"
+                )
+
             manager = ServerProcessManager(
                 server_dir=str(server_dir),
                 start_command=start_command,
@@ -203,6 +220,7 @@ class ServerRegistry:
                     mods_dir=self._path_value(raw, "mods_dir", server_dir / "mods"),
                     world_dir=self._path_value(raw, "world_dir", server_dir / "world"),
                     backup_dir=self._path_value(raw, "backup_dir", server_dir / "backups"),
+                    auto_stop_seconds=auto_stop_seconds,
                 )
             )
         return True
