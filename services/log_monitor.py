@@ -3,17 +3,18 @@ import logging
 import os
 from typing import AsyncGenerator
 
+from services.auto_stop import is_server_ready_line
 from services.event_feed import parse_minecraft_event
 
 logger = logging.getLogger(__name__)
 
 
 def _is_interesting(line: str) -> bool:
-    return parse_minecraft_event(line) is not None
+    return parse_minecraft_event(line) is not None or is_server_ready_line(line)
 
 
 async def tail_log(path: str) -> AsyncGenerator[str, None]:
-    """Follow latest.log and yield join/leave/chat/death events.
+    """Follow latest.log and yield join/leave/chat/death/server-ready events.
 
     The first open starts at EOF so historical events are not replayed. Log
     rotation and in-place truncation are handled without following stale data.
