@@ -94,6 +94,30 @@ class ControlApiTests(unittest.IsolatedAsyncioTestCase):
             "There are 1 of a max of 4 players online: Steve",
         )
 
+    async def test_events_returns_persistent_history(self) -> None:
+        storm = _server()
+        entries = [
+            SimpleNamespace(
+                timestamp="2026-10-02 12:34:56",
+                kind="server_start",
+                text="Сервер запущен · Telegram · Friend",
+            )
+        ]
+
+        with (
+            patch.object(control_api.server_registry, "get", return_value=storm),
+            patch.object(
+                control_api.event_history,
+                "recent",
+                new=AsyncMock(return_value=entries),
+            ),
+        ):
+            result = await control_api.minecraft_events("storm-survival", limit=20)
+
+        self.assertEqual(result["server_id"], "storm-survival")
+        self.assertEqual(result["events"][0]["kind"], "server_start")
+        self.assertIn("Friend", result["events"][0]["text"])
+
     async def test_logs_include_selected_server_identity(self) -> None:
         storm = _server()
 
@@ -192,12 +216,18 @@ class ControlApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_action_targets_selected_server(self) -> None:
         storm = _server()
 
-        result = await control_api._action_result("start", storm)
+        with patch.object(
+            control_api.event_history,
+            "record_action",
+            new=AsyncMock(),
+        ) as record_action:
+            result = await control_api._action_result("start", storm)
 
         self.assertEqual(result["server_id"], "storm-survival")
         self.assertEqual(result["server_name"], "Storm Survival")
         self.assertEqual(result["result"], "started")
         storm.manager.start.assert_awaited_once()
+        record_action.assert_awaited_once()
 
     async def test_rcon_targets_selected_server(self) -> None:
         storm = _server()
