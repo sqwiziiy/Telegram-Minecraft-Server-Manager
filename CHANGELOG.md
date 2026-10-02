@@ -2,6 +2,49 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased] - v1.1.0
+
+### Added
+
+- Granular per-user access control through `users.json`.
+- Built-in `owner`, `admin`, `operator`, `viewer` and `custom` roles.
+- Per-user `allow` and `deny` permission overrides.
+- `OWNER_IDS` for full-access owners while keeping legacy `ADMIN_IDS` compatibility.
+- Permission-aware Telegram menus and read-only mod listings.
+- Unit tests for access policy resolution and operator UI visibility.
+- Compact per-server live event feed that keeps the latest 10 join/leave/chat/death events in one editable Telegram message.
+- Multi-server registry with independent process/RCON configuration per server.
+- Event-driven empty-server auto-stop with Telegram controls and persisted timeout settings.
+- Optional bearer-authenticated external Control API with stable OpenAPI operation IDs for bots, AI agents, Open WebUI/Jarvis, automation systems and scripts.
+- Read-only Control API file inspection for logs, crash reports and diagnostics with path confinement and secret redaction.
+
+### Changed
+
+- Live Minecraft events now edit a single feed message instead of creating a new Telegram message for every event.
+- Event lines are parsed into compact join/leave/chat/death entries while preserving the original death reason.
+- Auto-stop runs locally inside the manager and does not depend on an AI client or recurring API polling.
+- Generic `CONTROL_API_*` configuration replaces Jarvis-specific naming for new setups; legacy `JARVIS_API_*` variables remain supported.
+- API documentation now treats Jarvis/Open WebUI as one possible client rather than part of the manager core.
+
+### Security
+
+- Sensitive handlers and callbacks enforce permissions server-side; hidden buttons are not treated as an authorization boundary.
+- Unknown users, roles and permission names fail closed.
+- The default `operator` role cannot use RCON, upload/delete mods, view launch logs or create backups.
+- Live log forwarding follows the `logs.view` permission.
+
+### Migration
+
+Existing v1.0 installations using only `ADMIN_IDS` keep full access without changes.
+
+For new setups, configure owners with:
+
+```env
+OWNER_IDS=123456789
+```
+
+Then copy `users.example.json` to `users.json` for limited-access users.
+
 ## [v1.0.0] - 2026-09-20
 
 First release-ready version of Telegram Minecraft Server Manager.

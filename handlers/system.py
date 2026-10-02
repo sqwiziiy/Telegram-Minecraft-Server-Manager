@@ -3,170 +3,240 @@ import html
 import logging
 
 import psutil
-from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram import Router
+from aiogram.types import CallbackQuery
 
-from keyboards.inline import server_action_confirm_keyboard, system_keyboard
+from handlers.start import _home_text, _server_picker
+from keyboards.inline import auto_stop_keyboard, confirm_keyboard, server_home_keyboard
+from middlewares.auth import deny_access
+from services.access_control import access_control
+from services.auto_stop import auto_stop_manager
 from services.backup import create_backup
-from services.server_process import server_process_manager
+from services.telegram_context import resolve_server
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-
-def _collect_sys_info() -> dict:
-    cpu = psutil.cpu_percent(interval=0.3)
-    ram = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
-    return {"cpu": cpu, "ram": ram, "disk": disk}
-
-
-def _format_uptime(seconds: int) -> str:
-    days, rem = divmod(seconds, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes, _ = divmod(rem, 60)
-    parts = []
-    if days:
-        parts.append(f"{days}д")
-    if hours:
-        parts.append(f"{hours}ч")
-    parts.append(f"{minutes}м")
-    return " ".join(parts)
+_ACTION_LABELS = {
+    "start": ("▶️", "запустить", "server.start"),
+    "stop": ("⏹", "остановить", "server.stop"),
+    "restart": ("🔁", "перезапустить", "server.restart"),
+}
+_ACTION_RESULT_MESSAGES = {
+    "started": "✅ Сервер запущен.",
+    "already_running": "ℹ️ Сервер уже запущен.",
+    "stopped": "✅ Сервер остановлен.",
+    "already_stopped": "ℹ️ Сервер уже остановлен.",
+    "killed": "⚠️ Сервер не завершился вовремя и был принудительно остановлен.",
+}
 
 
-async def _system_text() -> str:
-    info, server = await asyncio.gather(
-        asyncio.to_thread(_collect_sys_info),
-        server_process_manager.status(),
-    )
+def action_result_message(result: str) -> str:
+    return _ACTION_RESULT_MESSAGES.get(result, f"✅ Готово: {html.escape(result)}")
+
+
+def _action_parts(data: str, prefix: str) -> tuple[str, str] | None:
+    if not data.startswith(prefix):
+        return None
+    parts = data.split(":", 2)
+    if len(parts) != 3 or parts[1] not in _ACTION_LABELS or not parts[2]:
+        return None
+    return parts[1], parts[2]
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("host"))
+async def host_info(callback: CallbackQuery) -> None:
+    if callback.data != "host" or not access_control.can_system(callback.from_user.id):
+        await deny_access(callback)
+        return
+    info = await asyncio.to_thread(_collect_host_info)
     ram = info["ram"]
     disk = info["disk"]
+    text = (
+        "🖥 <b>Хост</b>\n\n"
+        f"CPU: <code>{info['cpu']:.1f}%</code>\n"
+        f"RAM: <code>{ram.used / 1024**3:.1f}/{ram.total / 1024**3:.1f} ГБ ({ram.percent}%)</code>\n"
+        f"Диск: <code>{disk.used / 1024**3:.1f}/{disk.total / 1024**3:.1f} ГБ ({disk.percent}%)</code>"
+    )
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Серверы", callback_data="servers")]]))
+    await callback.answer()
 
-    if server.running:
-        server_line = (
-            f"🟢 <b>Сервер:</b> работает · PID <code>{server.pid}</code> · "
-            f"{_format_uptime(server.uptime_seconds)} · {server.memory_mb:.0f} MB"
+
+def _collect_host_info() -> dict:
+    return {"cpu": psutil.cpu_percent(interval=0.3), "ram": psutil.virtual_memory(), "disk": psutil.disk_usage("/")}
+
+
+def _duration_text(seconds: int) -> str:
+    if seconds % 60 == 0:
+        return f"{seconds // 60} мин"
+    return f"{seconds} сек"
+
+
+def _auto_stop_text(server) -> str:
+    state = auto_stop_manager.status(server)
+    if not state["enabled"]:
+        status_text = "🚫 Выключен"
+    else:
+        status_text = f"✅ После {_duration_text(state['timeout_seconds'])} без игроков"
+
+    if state["pending"]:
+        countdown = (
+            f"\n⏳ До проверки: <code>{state['remaining_seconds']} сек</code>"
         )
     else:
-        server_line = "🔴 <b>Сервер:</b> остановлен"
+        countdown = "\n⏸ Сейчас отсчёт не активен."
 
     return (
-        "⚙️ <b>Панель сервера</b>\n\n"
-        f"{server_line}\n\n"
-        f"🖥 CPU: <code>{info['cpu']:.1f}%</code>\n"
-        f"💾 RAM: <code>{ram.used / 1024**3:.1f}/{ram.total / 1024**3:.1f} ГБ ({ram.percent}%)</code>\n"
-        f"💿 Диск: <code>{disk.used / 1024**3:.1f}/{disk.total / 1024**3:.1f} ГБ ({disk.percent}%)</code>"
+        f"⏱ <b>Auto-stop · {html.escape(server.server_name)}</b>\n\n"
+        f"{status_text}{countdown}\n\n"
+        "Работает по событиям входа/выхода. Перед выключением сервер "
+        "один раз перепроверяется через RCON."
     )
 
 
-async def _send_system_panel(message: Message) -> None:
-    await message.answer(
-        await _system_text(),
-        parse_mode="HTML",
-        reply_markup=system_keyboard(),
-    )
-
-
-@router.message(F.text == "⚙️ Система")
-async def system_menu(message: Message) -> None:
-    await _send_system_panel(message)
-
-
-@router.message(Command("sys"))
-async def cmd_sys(message: Message) -> None:
-    await _send_system_panel(message)
-
-
-@router.callback_query(F.data == "refresh_system")
-async def callback_refresh_system(callback: CallbackQuery) -> None:
-    await callback.answer()
-    await callback.message.edit_text(
-        await _system_text(),
-        parse_mode="HTML",
-        reply_markup=system_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "server_logs")
-async def callback_server_logs(callback: CallbackQuery) -> None:
-    await callback.answer()
-    output = await server_process_manager.tail_output(30)
-    if not output:
-        output = "(лог запуска пока пуст)"
-    await callback.message.answer(
-        "📜 <b>Последние строки manager-console.log</b>\n\n"
-        f"<pre>{html.escape(output[-3500:])}</pre>",
-        parse_mode="HTML",
-    )
-
-
-@router.callback_query(F.data == "create_backup")
-async def callback_create_backup(callback: CallbackQuery) -> None:
-    await callback.answer()
-    status = await callback.message.answer("⏳ Создаю бэкап мира…")
-    result = await create_backup()
-    await status.edit_text(result, parse_mode="HTML")
-
-
-_CONFIRM_TEXTS = {
-    "confirm_start": ("▶️", "запустить", "start"),
-    "confirm_stop": ("⏹", "остановить", "stop"),
-    "confirm_restart": ("🔁", "перезапустить", "restart"),
-}
-
-
-@router.callback_query(F.data.in_(set(_CONFIRM_TEXTS)))
-async def callback_confirm_action(callback: CallbackQuery) -> None:
-    icon, verb, action = _CONFIRM_TEXTS[callback.data]
-    warning = (
-        "\nMinecraft получит команду <code>stop</code> через RCON перед остановкой."
-        if action in {"stop", "restart"}
-        else ""
-    )
-    await callback.message.answer(
-        f"{icon} <b>Точно {verb} сервер?</b>{warning}",
-        parse_mode="HTML",
-        reply_markup=server_action_confirm_keyboard(action),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.in_({"cancel_start", "cancel_stop", "cancel_restart"}))
-async def callback_cancel_action(callback: CallbackQuery) -> None:
-    await callback.message.edit_text("❌ Действие отменено.")
-    await callback.answer()
-
-
-_ACTIONS = {
-    "start_server": ("▶️", "start"),
-    "stop_server": ("⏹", "stop"),
-    "restart_server": ("🔁", "restart"),
-}
-
-
-@router.callback_query(F.data.in_(set(_ACTIONS)))
-async def callback_execute_action(callback: CallbackQuery) -> None:
-    icon, action = _ACTIONS[callback.data]
-    await callback.answer()
-    await callback.message.edit_text(f"{icon} Выполняю…")
-
-    try:
-        result = await getattr(server_process_manager, action)()
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Server action %s failed", action)
-        await callback.message.edit_text(
-            f"❌ <b>Не удалось выполнить {action}</b>\n<code>{html.escape(str(exc))}</code>",
-            parse_mode="HTML",
-        )
+@router.callback_query(lambda c: c.data and c.data.startswith("autostop:"))
+async def auto_stop_menu(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(
+        callback.from_user.id,
+        server_id,
+        "server.autostop",
+    ):
+        await deny_access(callback)
         return
 
-    messages = {
-        "started": "✅ Сервер запущен.",
-        "already_running": "ℹ️ Сервер уже запущен.",
-        "stopped": "✅ Сервер корректно остановлен.",
-        "already_stopped": "ℹ️ Сервер уже остановлен.",
-        "killed": "⚠️ Сервер не завершился вовремя и был принудительно остановлен.",
-    }
-    logger.info("Server action %s by Telegram user %s: %s", action, callback.from_user.id, result)
-    await callback.message.edit_text(messages.get(result, f"✅ Готово: {html.escape(result)}"))
+    state = auto_stop_manager.status(server)
+    await callback.message.edit_text(
+        _auto_stop_text(server),
+        parse_mode="HTML",
+        reply_markup=auto_stop_keyboard(server_id, state["timeout_seconds"]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("autostop_set:"))
+async def auto_stop_set(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":", 2)
+    if len(parts) != 3:
+        await callback.answer("❌ Некорректная настройка.", show_alert=True)
+        return
+
+    try:
+        seconds = int(parts[1])
+    except ValueError:
+        await callback.answer("❌ Некорректный таймаут.", show_alert=True)
+        return
+
+    server_id = parts[2]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(
+        callback.from_user.id,
+        server_id,
+        "server.autostop",
+    ):
+        await deny_access(callback)
+        return
+
+    try:
+        state = await auto_stop_manager.set_timeout(server, seconds)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        _auto_stop_text(server),
+        parse_mode="HTML",
+        reply_markup=auto_stop_keyboard(server_id, state["timeout_seconds"]),
+    )
+    if seconds:
+        await callback.answer(f"✅ Auto-stop: {_duration_text(seconds)}")
+    else:
+        await callback.answer("✅ Auto-stop выключен")
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("confirm:"))
+async def confirm_action(callback: CallbackQuery) -> None:
+    parsed = _action_parts(callback.data, "confirm:")
+    if parsed is None:
+        await callback.answer("❌ Некорректное действие.", show_alert=True)
+        return
+    action, server_id = parsed
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    _, verb, permission = _ACTION_LABELS[action]
+    if not access_control.can_server(callback.from_user.id, server_id, permission):
+        await deny_access(callback)
+        return
+    warning = "\nMinecraft получит команду <code>stop</code> через RCON перед остановкой." if action in {"stop", "restart"} else ""
+    icon = _ACTION_LABELS[action][0]
+    await callback.message.edit_text(f"{icon} <b>Точно {verb} {html.escape(server.server_name)}?</b>{warning}", parse_mode="HTML", reply_markup=confirm_keyboard(action, server_id))
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("do:"))
+async def execute_action(callback: CallbackQuery) -> None:
+    parsed = _action_parts(callback.data, "do:")
+    if parsed is None:
+        await callback.answer("❌ Некорректное действие.", show_alert=True)
+        return
+    action, server_id = parsed
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, _ACTION_LABELS[action][2]):
+        await deny_access(callback)
+        return
+    await callback.answer()
+    await callback.message.edit_text(f"⏳ Выполняю для {html.escape(server.server_name)}…", parse_mode="HTML")
+    try:
+        result = await getattr(server.manager, action)()
+        await auto_stop_manager.on_server_action(server, action, result)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Server action failed")
+        await callback.message.edit_text(f"❌ <code>{html.escape(str(exc))}</code>", parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
+        return
+    result_message = action_result_message(result)
+    home_text = await _home_text(server)
+    await callback.message.edit_text(f"{result_message}\n\n{home_text}", parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
+    logger.info("Server action %s completed with %s", action, result)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("logs:"))
+async def server_logs(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "logs.view"):
+        await deny_access(callback)
+        return
+    output = await server.manager.tail_output(30) or "(лог запуска пока пуст)"
+    await callback.message.answer(f"📜 <b>Логи · {html.escape(server.server_name)}</b>\n\n<pre>{html.escape(output[-3500:])}</pre>", parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("backup:"))
+async def server_backup(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "backup.create"):
+        await deny_access(callback)
+        return
+    await callback.answer()
+    status = await callback.message.answer(f"⏳ Создаю бэкап мира · {html.escape(server.server_name)}…", parse_mode="HTML")
+    await status.edit_text(await create_backup(server), parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))

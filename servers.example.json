@@ -1,0 +1,24 @@
+{
+  "servers": [
+    {
+      "id": "storm-survival",
+      "name": "Storm Survival",
+      "server_dir": "/home/mentality/Games/Minecraft-Servers/Java/Fabric/1.20.1/storm-survival",
+      "start_command": "./start.sh",
+      "rcon_host": "127.0.0.1",
+      "rcon_port": 25575,
+      "rcon_password_env": "STORM_SURVIVAL_RCON_PASSWORD",
+      "auto_stop_seconds": 120
+    },
+    {
+      "id": "create-coop",
+      "name": "Create Coop",
+      "server_dir": "/home/mentality/Games/Minecraft-Servers/Java/Fabric/1.20.1/create-coop",
+      "start_command": "./start-server.sh",
+      "rcon_host": "127.0.0.1",
+      "rcon_port": 25576,
+      "rcon_password_env": "CREATE_COOP_RCON_PASSWORD",
+      "auto_stop_seconds": 0
+    }
+  ]
+}

@@ -39,14 +39,35 @@ class ServerStatus:
 
 
 class ServerProcessManager:
-    """Start and control Minecraft directly, without systemd and without shell=True."""
+    """Start and control one Minecraft server directly, without systemd or shell=True."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        server_dir: str | None = None,
+        start_command: str | None = None,
+        pid_file: str | None = None,
+        output_log: str | None = None,
+        stop_timeout: float | None = None,
+        rcon_host: str | None = None,
+        rcon_port: int | None = None,
+        rcon_password: str | None = None,
+    ) -> None:
         self._lock = asyncio.Lock()
-        self.server_dir = Path(SERVER_DIR).expanduser().resolve()
-        self.pid_file = Path(SERVER_PID_FILE).expanduser().resolve()
-        self.output_log = Path(SERVER_OUTPUT_LOG).expanduser().resolve()
-        self.start_command = SERVER_START_COMMAND
+        server_dir = SERVER_DIR if server_dir is None else server_dir
+        start_command = SERVER_START_COMMAND if start_command is None else start_command
+        pid_file = SERVER_PID_FILE if pid_file is None else pid_file
+        output_log = SERVER_OUTPUT_LOG if output_log is None else output_log
+        stop_timeout = SERVER_STOP_TIMEOUT if stop_timeout is None else stop_timeout
+
+        self.server_dir = Path(server_dir).expanduser().resolve()
+        self.pid_file = Path(pid_file).expanduser().resolve()
+        self.output_log = Path(output_log).expanduser().resolve()
+        self.start_command = start_command
+        self.stop_timeout = max(5.0, float(stop_timeout))
+        self.rcon_host = rcon_host
+        self.rcon_port = rcon_port
+        self.rcon_password = rcon_password
 
     def _build_argv(self) -> list[str]:
         argv = shlex.split(self.start_command)
@@ -228,12 +249,17 @@ class ServerProcessManager:
             # Prefer Minecraft's own shutdown path so the world is saved cleanly.
             rcon_result = ""
             try:
-                rcon_result = await send_rcon_command("stop")
+                rcon_result = await send_rcon_command(
+                    "stop",
+                    host=self.rcon_host,
+                    port=self.rcon_port,
+                    password=self.rcon_password,
+                )
             except Exception:  # noqa: BLE001
                 logger.exception("Graceful RCON stop failed")
 
             if self._should_wait_after_rcon_stop(rcon_result):
-                if await self._wait_stopped(process, SERVER_STOP_TIMEOUT):
+                if await self._wait_stopped(process, self.stop_timeout):
                     self._remove_pid_file()
                     return "stopped"
             else:
@@ -243,7 +269,7 @@ class ServerProcessManager:
                 )
 
             await self._terminate_process_group(process, signal.SIGTERM)
-            if await self._wait_stopped(process, min(10.0, SERVER_STOP_TIMEOUT)):
+            if await self._wait_stopped(process, min(10.0, self.stop_timeout)):
                 self._remove_pid_file()
                 return "stopped"
 
@@ -270,4 +296,10 @@ class ServerProcessManager:
         return await asyncio.to_thread(_read)
 
 
-server_process_manager = ServerProcessManager()
+server_process_manager = ServerProcessManager(
+    server_dir=SERVER_DIR,
+    start_command=SERVER_START_COMMAND,
+    pid_file=SERVER_PID_FILE,
+    output_log=SERVER_OUTPUT_LOG,
+    stop_timeout=SERVER_STOP_TIMEOUT,
+)

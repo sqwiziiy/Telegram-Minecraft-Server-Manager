@@ -1,45 +1,72 @@
 import html
 
-from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram import Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery
 
-from services.rcon import send_rcon_command
-from services.server_process import server_process_manager
+from keyboards.inline import server_home_keyboard
+from middlewares.auth import deny_access
+from services.access_control import access_control
+from services.telegram_context import resolve_server, safe_edit_text
 
 router = Router()
 
 
 def _format_uptime(seconds: int) -> str:
     hours, rem = divmod(seconds, 3600)
-    minutes, _ = divmod(rem, 60)
-    return f"{hours}ч {minutes}м"
+    return f"{hours}ч {rem // 60}м"
 
 
-async def server_status(message: Message) -> None:
-    process = await server_process_manager.status()
+async def _status_text(server) -> str:
+    process = await server.manager.status()
     if not process.running:
-        await message.answer(
-            "📊 <b>Статус сервера</b>\n\n🔴 Сервер остановлен.",
-            parse_mode="HTML",
-        )
+        return f"🌩 <b>{html.escape(server.server_name)}</b>\n\n⚫ Остановлен"
+    players = await server.rcon("list") if server.rcon_configured else "нет данных"
+    return (f"🌩 <b>{html.escape(server.server_name)}</b>\n"
+            f"🟢 Работает · <code>{html.escape(players)}</code>\n"
+            f"Аптайм: {_format_uptime(process.uptime_seconds)} · RAM: {process.memory_mb / 1024:.1f} GB")
+
+
+async def _show_status(callback: CallbackQuery, server_id: str, state: FSMContext | None = None) -> None:
+    if not access_control.can_server(callback.from_user.id, server_id, "server.status"):
+        await deny_access(callback)
         return
-
-    players = await send_rcon_command("list")
-    await message.answer(
-        "📊 <b>Статус сервера</b>\n\n"
-        f"🟢 Работает · PID <code>{process.pid}</code> · {_format_uptime(process.uptime_seconds)}\n"
-        f"🧠 Java/process RSS: <code>{process.memory_mb:.0f} MB</code>\n"
-        f"👥 <code>{html.escape(players)}</code>",
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if state is not None:
+        await state.clear()
+    await safe_edit_text(
+        callback.message,
+        await _status_text(server),
         parse_mode="HTML",
+        reply_markup=server_home_keyboard(server, callback.from_user.id),
     )
+    await callback.answer()
 
 
-@router.message(F.text == "📊 Статус")
-async def status_button(message: Message) -> None:
-    await server_status(message)
+@router.callback_query(lambda c: c.data and c.data.startswith("status:"))
+async def status_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await _show_status(callback, callback.data.split(":", 1)[1], state)
 
 
-@router.message(Command("status"))
-async def cmd_status(message: Message) -> None:
-    await server_status(message)
+@router.callback_query(lambda c: c.data and c.data.startswith("manage:"))
+async def manage_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.server_ids_for(callback.from_user.id, [server_id]):
+        await deny_access(callback)
+        return
+    await state.clear()
+    from keyboards.inline import server_actions_keyboard
+    await callback.message.edit_text(f"⚙️ <b>Управление · {html.escape(server.server_name)}</b>", parse_mode="HTML", reply_markup=server_actions_keyboard(server, callback.from_user.id))
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("refresh:"))
+async def refresh_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await _show_status(callback, callback.data.split(":", 1)[1], state)

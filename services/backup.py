@@ -5,17 +5,15 @@ import os
 import shutil
 from datetime import datetime
 
-from config import BACKUP_DIR, WORLD_DIR
-from services.rcon import send_rcon_command
-from services.server_process import server_process_manager
+from services.server_registry import ManagedServer, server_registry
 
 logger = logging.getLogger(__name__)
 
 
-async def _prepare_live_backup() -> tuple[bool, str | None]:
+async def _prepare_live_backup(server: ManagedServer) -> tuple[bool, str | None]:
     """Pause saves and flush the world when a reachable server is running."""
-    managed_status = await server_process_manager.status()
-    save_off_result = await send_rcon_command("save-off")
+    managed_status = await server.manager.status()
+    save_off_result = await server.rcon("save-off")
 
     if save_off_result.startswith("❌"):
         if managed_status.running:
@@ -25,9 +23,9 @@ async def _prepare_live_backup() -> tuple[bool, str | None]:
             )
         return False, None
 
-    flush_result = await send_rcon_command("save-all flush")
+    flush_result = await server.rcon("save-all flush")
     if flush_result.startswith("❌"):
-        await send_rcon_command("save-on")
+        await server.rcon("save-on")
         return False, (
             "❌ Не удалось выполнить <code>save-all flush</code>. "
             "Бэкап отменён."
@@ -36,17 +34,20 @@ async def _prepare_live_backup() -> tuple[bool, str | None]:
     return True, None
 
 
-async def create_backup() -> str:
+async def create_backup(server: ManagedServer | None = None) -> str:
     """Create a consistent ZIP backup, coordinating with a live server through RCON."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    server = server or server_registry.default()
+    backup_dir = server.backup_dir
+    world_dir = server.world_dir
+    os.makedirs(backup_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    archive_stem = os.path.join(BACKUP_DIR, f"world_backup_{timestamp}")
-    world_parent = os.path.dirname(os.path.abspath(WORLD_DIR))
-    world_name = os.path.basename(os.path.abspath(WORLD_DIR))
+    archive_stem = os.path.join(backup_dir, f"world_backup_{timestamp}")
+    world_parent = os.path.dirname(os.path.abspath(world_dir))
+    world_name = os.path.basename(os.path.abspath(world_dir))
 
     saves_paused = False
     try:
-        saves_paused, error = await _prepare_live_backup()
+        saves_paused, error = await _prepare_live_backup(server)
         if error:
             return error
 
@@ -65,12 +66,12 @@ async def create_backup() -> str:
             f"Размер: <code>{size_mb:.1f} MB</code>"
         )
     except FileNotFoundError:
-        return f"❌ Папка мира не найдена: <code>{html.escape(WORLD_DIR)}</code>"
+        return f"❌ Папка мира не найдена: <code>{html.escape(world_dir)}</code>"
     except Exception as exc:  # noqa: BLE001
         logger.exception("Backup failed")
         return f"❌ Ошибка создания бэкапа: <code>{html.escape(str(exc))}</code>"
     finally:
         if saves_paused:
-            save_on_result = await send_rcon_command("save-on")
+            save_on_result = await server.rcon("save-on")
             if save_on_result.startswith("❌"):
                 logger.error("Failed to re-enable Minecraft saves after backup: %s", save_on_result)

@@ -1,6 +1,6 @@
 # 🎮 Telegram Minecraft Server Manager
 
-Небольшая self-hosted панель для управления Minecraft-сервером прямо из Telegram: запуск, остановка, рестарт, RCON-консоль, статус, моды, бэкапы и события из логов.
+Небольшая self-hosted панель для управления всеми настроенными Minecraft-серверами из одного Telegram-бота: запуск, остановка, рестарт, RCON-консоль, статус, моды, бэкапы, событийный auto-stop и события из логов. Опциональный HTTP Control API позволяет подключать внешних ботов, ИИ-агентов и автоматизацию.
 
 > Python 3.11+ · aiogram 3.x. Сам Minecraft **не обязан** работать через systemd.
 
@@ -34,21 +34,27 @@ SERVER_START_COMMAND=java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
 | 🧩 Моды | Просмотр, загрузка и удаление `.jar` |
 | 💾 Бэкапы | Согласованный ZIP-бэкап через `save-off` → `save-all flush` → `save-on` |
 | 📜 Логи | Последние строки запуска + уведомления о событиях сервера |
-| 🔐 Доступ | Только Telegram ID из `ADMIN_IDS` |
+| ⏱ Auto-stop | Локально выключает пустой сервер после заданного таймаута по событиям входа/выхода |
+| 🔌 Control API | Опциональный HTTP/OpenAPI интерфейс с Bearer auth для ботов, ИИ-агентов и скриптов |
+| 🔐 Доступ | `OWNER_IDS` + роли и отдельные permissions из `users.json` |
 
 ## Как это устроено
 
 ```mermaid
 flowchart LR
-    TG[Telegram admin] --> BOT[aiogram bot]
-    BOT --> PM[Process manager]
-    BOT --> RCON[RCON]
-    BOT --> MODS[Mods]
-    BOT --> BACKUP[Backup]
+    TG[Telegram user] --> BOT[aiogram bot]
+    EXT[Внешний бот / ИИ / скрипт] --> API[Опциональный Control API]
+    BOT --> CORE[Сервисы менеджера]
+    API --> CORE
+    CORE --> PM[Process manager]
+    CORE --> RCON[RCON]
+    CORE --> MODS[Mods]
+    CORE --> BACKUP[Backup]
+    CORE --> AUTO[Auto-stop]
     PM --> MC[Minecraft / start.sh]
     RCON --> MC
     MC --> LOG[latest.log]
-    LOG --> BOT
+    LOG --> CORE
 ```
 
 Process manager сохраняет PID и время создания процесса. Поэтому после перезапуска самого бота он может снова узнать управляемый Minecraft-процесс и не спутать его с другим процессом после PID reuse.
@@ -77,15 +83,60 @@ nano .env
 
 ```env
 BOT_TOKEN=123456:replace_me
-ADMIN_IDS=123456789
-
-SERVER_DIR=/srv/minecraft
-SERVER_START_COMMAND=./start.sh
-
-RCON_HOST=127.0.0.1
-RCON_PORT=25575
-RCON_PASSWORD=replace_me
+OWNER_IDS=123456789
+MINECRAFT_SERVERS_FILE=./servers.json
+DEFAULT_SERVER_ID=storm-survival
+STORM_SURVIVAL_RCON_PASSWORD=replace_me
 ```
+
+### Гибкий доступ для других пользователей
+
+Владелец задаётся в `.env` и всегда имеет полный доступ:
+
+```env
+OWNER_IDS=123456789
+```
+
+Для друзей и других пользователей скопируйте пример политики:
+
+```bash
+cp users.example.json users.json
+nano users.json
+```
+
+Например, профиль друга с запуском/остановкой/рестартом и **только просмотром модов**:
+
+```json
+{
+  "users": {
+    "987654321": {
+      "name": "Friend",
+      "servers": {
+        "storm-survival": {
+          "role": "operator",
+          "allow": [],
+          "deny": []
+        }
+      }
+    }
+  }
+}
+```
+
+Роль `operator` даёт только:
+
+- `server.status`
+- `server.start`
+- `server.stop`
+- `server.restart`
+- `server.autostop`
+- `mods.view`
+
+Консоль, удаление/загрузка модов, логи, системная информация и бэкапы для неё закрыты. Кнопки без прав не показываются, но главное — каждый handler и callback дополнительно проверяет permission на backend.
+
+Для кастомной настройки используйте `role: "custom"` и `allow`, либо добавляйте/убирайте отдельные права через `allow` / `deny`. `deny` всегда имеет приоритет.
+
+После изменения `users.json` перезапустите бота, чтобы перечитать политику доступа.
 
 Нормальный `start.sh`:
 
@@ -111,7 +162,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-После этого Minecraft запускается через Telegram → **⚙️ Система** → **▶️ Запустить**.
+После этого Minecraft запускается через Telegram → **/start** → выбрать сервер → **⚙️ Управление** → **▶️ Запустить**. Auto-stop настраивается прямо на экране сервера через **⏱ Auto-stop** и работает независимо от внешнего API и любого ИИ.
 
 ## systemd для самого бота
 
@@ -136,30 +187,27 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Пользователю `mcbot` нужны обычные права на `SERVER_DIR`, папку модов, мира, бэкапов и файлы PID/логов. Passwordless sudo для управления Minecraft больше не нужен.
+В современном режиме пользователю `mcbot` нужны обычные права на `server_dir`, папки модов, мира, бэкапов, Minecraft/manager-логи и PID-файлы каждого сервера из `servers.json`. Legacy fallback использует соответствующие старые пути из `.env`. Passwordless sudo для управления Minecraft больше не нужен.
 
 ## Переменные окружения
 
 | Переменная | Что задаёт |
 | --- | --- |
 | `BOT_TOKEN` | Токен Telegram-бота |
-| `ADMIN_IDS` | Разрешённые Telegram user ID |
-| `SERVER_DIR` | Рабочая папка Minecraft |
-| `SERVER_START_COMMAND` | Команда запуска, включая `.sh` |
-| `SERVER_PID_FILE` | PID + metadata управляемого процесса |
-| `SERVER_OUTPUT_LOG` | stdout/stderr процесса запуска |
-| `SERVER_STOP_TIMEOUT` | Сколько ждать graceful stop через RCON |
-| `RCON_HOST`, `RCON_PORT` | RCON endpoint |
-| `RCON_PASSWORD` | RCON пароль |
-| `MINECRAFT_LOG_PATH` | Путь к `latest.log` |
-| `MODS_DIR` | Папка модов |
-| `WORLD_DIR` | Мир для бэкапа |
-| `BACKUP_DIR` | Папка бэкапов |
+| `OWNER_IDS` | Telegram ID владельцев с полным доступом |\n| `ADMIN_IDS` | Legacy-список полного доступа для совместимости с v1.0 |\n| `ACCESS_USERS_FILE` | Путь к `users.json` с ролями и permissions |
+| `MINECRAFT_SERVERS_FILE` | JSON-реестр всех серверов |
+| `DEFAULT_SERVER_ID` | ID сервера по умолчанию; должен быть в реестре |
+| `SERVER_*`, `RCON_*` и переменные путей | Устаревший fallback, только если реестр отсутствует/пуст |
 | `MAX_MOD_UPLOAD_MB` | Максимальный размер загружаемого мода |
+| `AUTO_STOP_STATE_FILE` | Файл сохранённого состояния auto-stop |
+| `AUTO_STOP_DEFAULT_SECONDS` | Таймаут пустого сервера по умолчанию; `0` отключает функцию |
+| `CONTROL_API_ENABLED` | Включить опциональный внешний HTTP Control API |
+| `CONTROL_API_HOST`, `CONTROL_API_PORT` | Адрес и порт Control API |
+| `CONTROL_API_TOKEN` | Bearer-токен для внешних клиентов API |
 
 ## Безопасность
 
-- Все сообщения и callback проходят проверку `ADMIN_IDS`.
+- Все сообщения и callback сначала проходят общую авторизацию, а опасные действия дополнительно проверяют конкретный permission.
 - Linux shell через Telegram не предоставляется: Minecraft-команды идут через RCON.
 - Запуск сервера выполняется без `shell=True`.
 - Размер входящего RCON-пакета проверяется до чтения.
@@ -167,7 +215,7 @@ WantedBy=multi-user.target
 - Вывод RCON, логов, имён файлов и ошибок экранируется перед HTML-разметкой Telegram.
 - Загрузка модов ограничена по размеру, path traversal блокируется, существующие файлы не перезаписываются.
 - Секреты хранятся только в `.env`; CI дополнительно проверяет типичные случайно закоммиченные токены/пароли.
-- Любой ID в `ADMIN_IDS` фактически получает полный административный доступ к Minecraft-серверу.
+- `OWNER_IDS` и legacy `ADMIN_IDS` имеют полный доступ; пользователи из `users.json` получают только явно разрешённые возможности.
 
 ## Структура
 
@@ -185,13 +233,50 @@ WantedBy=multi-user.target
 ├── middlewares/
 │   └── auth.py
 ├── services/
+│   ├── auto_stop.py
 │   ├── backup.py
+│   ├── control_api.py
+│   ├── event_feed.py
 │   ├── log_monitor.py
 │   ├── rcon.py
-│   └── server_process.py
+│   ├── server_process.py
+│   └── server_registry.py
+├── docs/
+│   └── CONTROL_API.md
 └── .github/workflows/ci.yml
 ```
 
+## Несколько серверов
+
+Все современные серверы, включая Storm Survival, задаются в `servers.json`. Секреты RCON остаются только в `.env` и подключаются через `rcon_password_env`. Пути PID, логов, модов, мира и бэкапов можно указать явно или получить относительно `server_dir`.
+
+Один бот показывает пользователю только назначенные ему серверы. Права в `users.json` задаются внутри `servers`; владельцы и legacy-администраторы имеют полный доступ ко всем серверам. Старый профиль без `servers` действует только для сервера по умолчанию. При одновременном запуске нескольких серверов используйте уникальные RCON-порты.
+
+Информация о CPU/RAM/диске хоста глобальна и доступна только владельцам и legacy-администраторам через кнопку `🖥 Хост`; доступ к отдельному Minecraft-серверу её не выдаёт.
+
 ## Границы проекта
 
-Это менеджер одного доверенного приватного сервера, а не публичная multi-user hosting-панель. Бота не стоит открывать для незнакомых пользователей.
+Это менеджер доверенных приватных серверов, а не публичная multi-user hosting-панель. Бота не стоит открывать для незнакомых пользователей.
+
+
+## Опциональный внешний Control API
+
+HTTP API — это **интеграционный слой**, а не обязательная часть работы менеджера.
+Telegram-управление, auto-stop, управление процессами и обработка событий продолжают
+работать, даже если API полностью выключен.
+
+API подходит для **любого доверенного внешнего клиента**: ИИ-ассистента, Open WebUI/Jarvis,
+другого Telegram/Discord-бота, панели, системы автоматизации или локального скрипта.
+OpenAPI-схема содержит стабильные operation ID вроде `minecraft_status`,
+`minecraft_set_auto_stop` и `minecraft_rcon`, поэтому ИИ/agent-клиенты могут
+подключать их как инструменты.
+
+Для диагностики доступны read-only операции чтения crash-reports, логов и других файлов
+внутри каталога Minecraft-сервера. Выход за `server_dir` блокируется, чувствительные
+файлы и очевидные секреты защищены.
+
+Полная документация, разделение READ-ONLY / WRITE, настройка Bearer auth и примеры:
+**[docs/CONTROL_API.md](docs/CONTROL_API.md)**.
+
+Старые переменные `JARVIS_API_*` сохранены для совместимости. Для новых установок
+используйте `CONTROL_API_*`.

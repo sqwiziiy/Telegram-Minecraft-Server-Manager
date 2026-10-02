@@ -1,0 +1,19 @@
+{
+  "users": {
+    "123456789": {
+      "name": "Friend",
+      "servers": {
+        "storm-survival": {
+          "role": "operator",
+          "allow": [],
+          "deny": []
+        },
+        "create-coop": {
+          "role": "viewer",
+          "allow": [],
+          "deny": []
+        }
+      }
+    }
+  }
+}
