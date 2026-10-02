@@ -21,6 +21,8 @@ def server_home_keyboard(server: ManagedServer, user_id: int) -> InlineKeyboardM
         rows.append([InlineKeyboardButton(text="⚙️ Управление", callback_data=f"manage:{sid}")])
     if access_control.can_server(user_id, sid, "server.autostop"):
         rows.append([InlineKeyboardButton(text="⏱ Auto-stop", callback_data=f"autostop:{sid}")])
+    if access_control.can_server(user_id, sid, "events.view"):
+        rows.append([InlineKeyboardButton(text="📋 События", callback_data=f"events:{sid}")])
     utility = []
     for label, perm, action in (("💻 Консоль", "console.use", "console"), ("🧩 Моды", "mods.view", "mods"), ("📜 Логи", "logs.view", "logs"), ("💾 Бэкап", "backup.create", "backup")):
         if access_control.can_server(user_id, sid, perm):
@@ -91,3 +93,14 @@ def auto_stop_keyboard(server_id: str, current_seconds: int) -> InlineKeyboardMa
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+
+def events_keyboard(server_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"events_refresh:{server_id}")],
+            [InlineKeyboardButton(text="📄 Лог за сегодня", callback_data=f"events_file:{server_id}")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")],
+        ]
+    )
