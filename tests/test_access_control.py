@@ -40,6 +40,7 @@ class AccessControlTests(unittest.TestCase):
             self.assertTrue(access.can(222, "server.stop"))
             self.assertTrue(access.can(222, "server.restart"))
             self.assertTrue(access.can(222, "mods.view"))
+            self.assertTrue(access.can(222, "events.view"))
             self.assertFalse(access.can(222, "console.use"))
             self.assertFalse(access.can(222, "mods.upload"))
             self.assertFalse(access.can(222, "mods.delete"))
