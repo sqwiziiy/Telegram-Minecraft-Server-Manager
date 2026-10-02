@@ -12,6 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from config import JARVIS_API_HOST, JARVIS_API_PORT, JARVIS_API_TOKEN
+from services.auto_stop import auto_stop_manager
 from services.server_registry import ManagedServer, server_registry
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,17 @@ class RconCommandRequest(BaseModel):
         min_length=1,
         max_length=500,
         description="One Minecraft RCON command without a leading slash.",
+    )
+
+
+class AutoStopRequest(BaseModel):
+    timeout_seconds: int = Field(
+        ge=0,
+        le=86400,
+        description=(
+            "Seconds the server may stay empty before it is stopped. "
+            "Use 0 to disable auto-stop."
+        ),
     )
 
 
@@ -81,6 +93,7 @@ async def _status_payload(server: ManagedServer, *, include_players: bool = True
         **_identity(server),
         **asdict(process),
         "rcon_configured": server.rcon_configured,
+        "auto_stop": auto_stop_manager.status(server),
     }
 
     if include_players and process.running and server.rcon_configured:
@@ -225,6 +238,7 @@ async def _action_result(action: str, server: ManagedServer | None = None) -> di
             detail=str(exc),
         ) from exc
 
+    await auto_stop_manager.on_server_action(target, action, result)
     payload = await _status_payload(target)
     payload["result"] = result
     return payload
@@ -267,6 +281,22 @@ async def minecraft_status(
 ) -> dict:
     """Return process state and player list for the selected server."""
     return await _status_payload(_get_server(server_id))
+
+
+@app.get(
+    "/v1/minecraft/servers/{server_id}/auto-stop",
+    dependencies=[Depends(_require_bearer)],
+    operation_id="minecraft_get_auto_stop",
+    summary="Get event-driven empty-server auto-stop settings",
+)
+async def minecraft_get_auto_stop(
+    server_id: str = Path(description="Stable server id returned by minecraft_list_servers"),
+) -> dict:
+    server = _get_server(server_id)
+    return {
+        **_identity(server),
+        **auto_stop_manager.status(server),
+    }
 
 
 @app.get(
@@ -476,6 +506,24 @@ async def minecraft_restart(
     server_id: str = Path(description="Stable server id returned by minecraft_list_servers"),
 ) -> dict:
     return await _action_result("restart", _get_server(server_id))
+
+
+@app.post(
+    "/v1/minecraft/servers/{server_id}/auto-stop",
+    dependencies=[Depends(_require_bearer)],
+    operation_id="minecraft_set_auto_stop",
+    summary="Set event-driven empty-server auto-stop timeout",
+)
+async def minecraft_set_auto_stop(
+    request: AutoStopRequest,
+    server_id: str = Path(description="Stable server id returned by minecraft_list_servers"),
+) -> dict:
+    server = _get_server(server_id)
+    state = await auto_stop_manager.set_timeout(server, request.timeout_seconds)
+    return {
+        **_identity(server),
+        **state,
+    }
 
 
 @app.post(
