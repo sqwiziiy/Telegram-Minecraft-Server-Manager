@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Iterable, TYPE_CHECKING
 
 from config import AUTO_STOP_STATE_FILE
-from services.event_feed import parse_minecraft_event
+from services.event_history import parse_minecraft_event
 
 if TYPE_CHECKING:
     from services.server_registry import ManagedServer
