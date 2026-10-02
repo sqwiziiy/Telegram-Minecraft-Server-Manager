@@ -1,6 +1,6 @@
 # 🎮 Telegram Minecraft Server Manager
 
-Control all configured Linux Minecraft servers from one Telegram bot: start/stop/restart, RCON console, status, mods, backups and selected server events.
+Control all configured Linux Minecraft servers from one Telegram bot: start/stop/restart, RCON console, status, mods, backups, event-driven auto-stop and selected server events. An optional HTTP Control API lets external bots, AI agents and automation systems use the same manager.
 
 > Built with Python 3.11+ and aiogram 3.x. Minecraft itself does **not** need to be managed by systemd.
 
@@ -34,6 +34,8 @@ No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR 
 | 🧩 Mod manager | List, upload and delete `.jar` mods |
 | 💾 Backups | Create RCON-coordinated ZIP backups with saves paused and flushed |
 | 📜 Logs | Show launch output and forward selected player/chat/death events |
+| ⏱ Auto-stop | Stop an empty server after a configurable timeout, driven locally by join/leave events |
+| 🔌 Control API | Optional bearer-authenticated HTTP/OpenAPI interface for bots, AI agents and scripts |
 | 🔐 Access control | `OWNER_IDS` plus per-user roles and permissions from `users.json` |
 
 ## Architecture
@@ -41,14 +43,18 @@ No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR 
 ```mermaid
 flowchart LR
     TG[Telegram user] --> BOT[aiogram bot]
-    BOT --> PM[Process manager]
-    BOT --> RCON[RCON client]
-    BOT --> MODS[Mod manager]
-    BOT --> BACKUP[Backup service]
+    EXT[External bot / AI / script] --> API[Optional Control API]
+    BOT --> CORE[Manager services]
+    API --> CORE
+    CORE --> PM[Process manager]
+    CORE --> RCON[RCON client]
+    CORE --> MODS[Mod manager]
+    CORE --> BACKUP[Backup service]
+    CORE --> AUTO[Auto-stop]
     PM --> MC[Minecraft / start.sh]
     RCON --> MC
     MC --> LOG[latest.log]
-    LOG --> BOT
+    LOG --> CORE
 ```
 
 The process manager stores PID + process creation time. This lets the bot reconnect to the same managed process after the bot itself restarts while reducing PID-reuse mistakes.
@@ -123,6 +129,7 @@ The built-in `operator` role grants only:
 - `server.start`
 - `server.stop`
 - `server.restart`
+- `server.autostop`
 - `mods.view`
 
 It does not grant RCON console access, mod upload/delete, logs, host system information or backups. Unauthorized buttons are hidden, and every sensitive handler/callback also checks the permission server-side.
@@ -155,7 +162,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**.
+The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**. Auto-stop is configured from the same server screen through **⏱ Auto-stop** and works without the external API or any AI client.
 
 ## Running the bot with systemd
 
@@ -192,6 +199,11 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 | `DEFAULT_SERVER_ID` | Default server ID; must exist in the registry |
 | `SERVER_*`, `RCON_*`, path variables | Deprecated legacy fallback, used only when the registry is missing/empty |
 | `MAX_MOD_UPLOAD_MB` | Maximum Telegram mod upload size |
+| `AUTO_STOP_STATE_FILE` | Persistent auto-stop override state |
+| `AUTO_STOP_DEFAULT_SECONDS` | Default empty-server timeout; `0` disables it |
+| `CONTROL_API_ENABLED` | Enable the optional external HTTP Control API |
+| `CONTROL_API_HOST`, `CONTROL_API_PORT` | Control API bind address and port |
+| `CONTROL_API_TOKEN` | Bearer token for external API clients |
 
 ## Security notes
 
@@ -221,10 +233,16 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 ├── middlewares/
 │   └── auth.py
 ├── services/
+│   ├── auto_stop.py
 │   ├── backup.py
+│   ├── control_api.py
+│   ├── event_feed.py
 │   ├── log_monitor.py
 │   ├── rcon.py
-│   └── server_process.py
+│   ├── server_process.py
+│   └── server_registry.py
+├── docs/
+│   └── CONTROL_API.md
 └── .github/workflows/ci.yml
 ```
 
@@ -243,13 +261,21 @@ Use unique RCON ports when multiple servers run simultaneously.
 This project is intentionally small and focused on trusted private servers. It is not a multi-tenant hosting panel and should not be exposed as a public bot.
 
 
-## Jarvis read-only file inspection
+## Optional external Control API
 
-The Jarvis control API can browse files inside each configured Minecraft server root without exposing arbitrary host paths:
+The HTTP API is an integration layer, not a requirement for the manager. Telegram control,
+auto-stop, process management and event handling keep working when the API is disabled.
 
-- `minecraft_list_files` lists directories such as `logs`, `crash-reports`, `mods`, and `config`.
-- `minecraft_read_file` reads text files and transparently decompresses gzip text such as rotated `.log.gz` files.
-- Paths are resolved against the configured `server_dir`; traversal and symlink escapes outside that directory are rejected.
-- Common credential/key files are blocked, and obvious password/token/secret assignment lines are redacted from returned text.
+It is suitable for **any trusted external client**: AI assistants, Open WebUI/Jarvis,
+other bots, dashboards, automation systems or local scripts. The OpenAPI schema exposes
+stable operation IDs such as `minecraft_status`, `minecraft_set_auto_stop` and
+`minecraft_rcon`, so AI/agent clients can import them as tools.
 
-This lets Jarvis inspect crash reports and rotated logs directly before asking the user to upload anything.
+Read-only file inspection is also available for crash reports, logs and configuration
+diagnostics, with traversal protection and secret redaction.
+
+See **[docs/CONTROL_API.md](docs/CONTROL_API.md)** for configuration, authentication,
+the complete read-only/write operation list and examples.
+
+Legacy `JARVIS_API_*` environment variables remain supported, but new installations
+should use `CONTROL_API_*`.
