@@ -7,9 +7,10 @@ from aiogram import Router
 from aiogram.types import CallbackQuery
 
 from handlers.start import _home_text, _server_picker
-from keyboards.inline import confirm_keyboard, server_home_keyboard
+from keyboards.inline import auto_stop_keyboard, confirm_keyboard, server_home_keyboard
 from middlewares.auth import deny_access
 from services.access_control import access_control
+from services.auto_stop import auto_stop_manager
 from services.backup import create_backup
 from services.telegram_context import resolve_server
 
@@ -66,6 +67,101 @@ def _collect_host_info() -> dict:
     return {"cpu": psutil.cpu_percent(interval=0.3), "ram": psutil.virtual_memory(), "disk": psutil.disk_usage("/")}
 
 
+def _duration_text(seconds: int) -> str:
+    if seconds % 60 == 0:
+        return f"{seconds // 60} мин"
+    return f"{seconds} сек"
+
+
+def _auto_stop_text(server) -> str:
+    state = auto_stop_manager.status(server)
+    if not state["enabled"]:
+        status_text = "🚫 Выключен"
+    else:
+        status_text = f"✅ После {_duration_text(state['timeout_seconds'])} без игроков"
+
+    if state["pending"]:
+        countdown = (
+            f"\n⏳ До проверки: <code>{state['remaining_seconds']} сек</code>"
+        )
+    else:
+        countdown = "\n⏸ Сейчас отсчёт не активен."
+
+    return (
+        f"⏱ <b>Auto-stop · {html.escape(server.server_name)}</b>\n\n"
+        f"{status_text}{countdown}\n\n"
+        "Работает по событиям входа/выхода. Перед выключением сервер "
+        "один раз перепроверяется через RCON."
+    )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("autostop:"))
+async def auto_stop_menu(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(
+        callback.from_user.id,
+        server_id,
+        "server.autostop",
+    ):
+        await deny_access(callback)
+        return
+
+    state = auto_stop_manager.status(server)
+    await callback.message.edit_text(
+        _auto_stop_text(server),
+        parse_mode="HTML",
+        reply_markup=auto_stop_keyboard(server_id, state["timeout_seconds"]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("autostop_set:"))
+async def auto_stop_set(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":", 2)
+    if len(parts) != 3:
+        await callback.answer("❌ Некорректная настройка.", show_alert=True)
+        return
+
+    try:
+        seconds = int(parts[1])
+    except ValueError:
+        await callback.answer("❌ Некорректный таймаут.", show_alert=True)
+        return
+
+    server_id = parts[2]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(
+        callback.from_user.id,
+        server_id,
+        "server.autostop",
+    ):
+        await deny_access(callback)
+        return
+
+    try:
+        state = await auto_stop_manager.set_timeout(server, seconds)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        _auto_stop_text(server),
+        parse_mode="HTML",
+        reply_markup=auto_stop_keyboard(server_id, state["timeout_seconds"]),
+    )
+    if seconds:
+        await callback.answer(f"✅ Auto-stop: {_duration_text(seconds)}")
+    else:
+        await callback.answer("✅ Auto-stop выключен")
+
+
 @router.callback_query(lambda c: c.data and c.data.startswith("confirm:"))
 async def confirm_action(callback: CallbackQuery) -> None:
     parsed = _action_parts(callback.data, "confirm:")
@@ -105,6 +201,7 @@ async def execute_action(callback: CallbackQuery) -> None:
     await callback.message.edit_text(f"⏳ Выполняю для {html.escape(server.server_name)}…", parse_mode="HTML")
     try:
         result = await getattr(server.manager, action)()
+        await auto_stop_manager.on_server_action(server, action, result)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Server action failed")
         await callback.message.edit_text(f"❌ <code>{html.escape(str(exc))}</code>", parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
