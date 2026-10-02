@@ -72,8 +72,7 @@ if not 1 <= RCON_PORT <= 65535:
 
 SERVER_DIR: str = os.getenv("SERVER_DIR", "/opt/minecraft")
 
-# Stable identity exposed by the Jarvis API. This becomes important when
-# multiple manager instances control different Minecraft servers.
+# Stable server identity used by Telegram and the optional Control API.
 SERVER_ID: str = os.getenv("SERVER_ID", "minecraft").strip() or "minecraft"
 SERVER_NAME: str = os.getenv("SERVER_NAME", "Minecraft Server").strip() or "Minecraft Server"
 
