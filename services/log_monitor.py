@@ -4,13 +4,13 @@ import os
 from typing import AsyncGenerator
 
 from services.auto_stop import is_server_ready_line
-from services.event_feed import parse_minecraft_event
+from services.event_history import parse_minecraft_event
 
 logger = logging.getLogger(__name__)
 
 
 def _is_interesting(line: str) -> bool:
-    return parse_minecraft_event(line) is not None or is_server_ready_line(line)
+    return parse_minecraft_event(line) is not None
 
 
 async def tail_log(path: str) -> AsyncGenerator[str, None]:
