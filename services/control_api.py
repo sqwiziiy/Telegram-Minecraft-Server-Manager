@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from config import JARVIS_API_HOST, JARVIS_API_PORT, JARVIS_API_TOKEN
+from config import CONTROL_API_HOST, CONTROL_API_PORT, CONTROL_API_TOKEN
 from services.auto_stop import auto_stop_manager
 from services.server_registry import ManagedServer, server_registry
 
@@ -25,9 +25,10 @@ app = FastAPI(
     title="Minecraft Server Manager Control API",
     version="2.0.0",
     description=(
-        "Multi-server control API for Jarvis/Open WebUI. "
-        "Read-only discovery/status/log operations and explicit write operations "
-        "are exposed as separate OpenAPI functions."
+        "Optional multi-server HTTP API for external clients such as bots, "
+        "AI agents, Open WebUI/Jarvis, automation systems and scripts. "
+        "The Telegram bot and built-in server automation do not depend on this API. "
+        "Read-only and mutating operations are exposed as separate OpenAPI functions."
     ),
     docs_url=None,
     redoc_url=None,
@@ -61,7 +62,7 @@ def _require_bearer(
     if (
         credentials is None
         or credentials.scheme.lower() != "bearer"
-        or not secrets.compare_digest(credentials.credentials, JARVIS_API_TOKEN)
+        or not secrets.compare_digest(credentials.credentials, CONTROL_API_TOKEN)
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -229,7 +230,7 @@ async def _action_result(action: str, server: ManagedServer | None = None) -> di
         result = await getattr(target.manager, action)()
     except Exception as exc:  # noqa: BLE001
         logger.exception(
-            "Jarvis API action %s failed for server %s",
+            "Control API action %s failed for server %s",
             action,
             target.server_id,
         )
@@ -444,7 +445,7 @@ async def minecraft_read_file(
     if _looks_sensitive(target):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="sensitive file type is not readable through the Jarvis API",
+            detail="sensitive file type is not readable through the Control API",
         )
 
     try:
@@ -639,8 +640,8 @@ async def run_control_api() -> None:
     """Run the shared multi-server API in the Telegram manager process."""
     config = uvicorn.Config(
         app,
-        host=JARVIS_API_HOST,
-        port=JARVIS_API_PORT,
+        host=CONTROL_API_HOST,
+        port=CONTROL_API_PORT,
         log_level="info",
         access_log=False,
     )
@@ -649,9 +650,9 @@ async def run_control_api() -> None:
     server.install_signal_handlers = lambda: None
 
     logger.info(
-        "Jarvis multi-server API starting on http://%s:%s (%s servers)",
-        JARVIS_API_HOST,
-        JARVIS_API_PORT,
+        "External Control API starting on http://%s:%s (%s servers)",
+        CONTROL_API_HOST,
+        CONTROL_API_PORT,
         len(server_registry.list()),
     )
     await server.serve()
