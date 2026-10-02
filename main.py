@@ -12,7 +12,7 @@ from handlers import console, mods, start, status, system
 from middlewares.auth import AuthMiddleware
 from services.access_control import access_control
 from services.auto_stop import auto_stop_manager
-from services.event_feed import event_feed
+from services.event_history import event_history
 from services.log_monitor import tail_log
 from services.server_registry import server_registry
 
@@ -43,16 +43,7 @@ async def _monitor_server(server) -> None:
         try:
             async for line in tail_log(server.minecraft_log_path):
                 await auto_stop_manager.handle_line(server, line)
-                await event_feed.publish_line(
-                    bot,
-                    server_id=server.server_id,
-                    server_name=server.server_name,
-                    line=line,
-                    user_ids=access_control.users_with_server_permission(
-                        server.server_id,
-                        "logs.view",
-                    ),
-                )
+                await event_history.record_line(server, line)
         except FileNotFoundError:
             logger.warning("Minecraft log not found for %s: %s; retrying in 15s", server.server_id, server.minecraft_log_path)
             await asyncio.sleep(15)
@@ -66,6 +57,12 @@ async def _log_monitor_task() -> None:
 
 
 async def _notify_auto_stop(server, timeout_seconds: int, result: str) -> None:
+    await event_history.record_auto_stop(
+        server,
+        timeout_seconds=timeout_seconds,
+        result=result,
+    )
+
     if timeout_seconds % 60 == 0:
         duration = f"{timeout_seconds // 60} мин"
     else:
@@ -94,7 +91,20 @@ async def _notify_auto_stop(server, timeout_seconds: int, result: str) -> None:
 async def _on_startup() -> None:
     logger.info("Bot started. Full-access users: %s", ADMIN_IDS)
     auto_stop_manager.set_notifier(_notify_auto_stop)
-    await auto_stop_manager.bootstrap(server_registry.list())
+    servers = server_registry.list()
+    await auto_stop_manager.bootstrap(servers)
+    for server in servers:
+        try:
+            process = await server.manager.status()
+            if process.running:
+                await event_history.record(
+                    server,
+                    kind="manager_detected",
+                    text="Менеджер запущен и обнаружил уже работающий сервер",
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to record startup state for %s", server.server_id)
+
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
