@@ -73,12 +73,12 @@ These operations inspect state and files without changing the Minecraft server:
 | --- | --- | --- | --- |
 | `minecraft_list_servers` | GET | `/v1/minecraft/servers` | List configured servers |
 | `minecraft_status` | GET | `/v1/minecraft/servers/{server_id}/status` | Process state, players and auto-stop state |
-| `minecraft_get_auto_stop` | GET | `/v1/minecraft/servers/{server_id}/auto-stop` | Read auto-stop configuration/state |
+| `minecraft_get_auto_stop` | GET | `/v1/minecraft/servers/{server_id}/auto-stop` | Read auto-stop configuration/state |\n| `minecraft_events` | GET | `/v1/minecraft/servers/{server_id}/events` | Read recent persistent server activity/lifecycle events |
 | `minecraft_logs` | GET | `/v1/minecraft/servers/{server_id}/logs` | Read recent manager output |
 | `minecraft_list_files` | GET | `/v1/minecraft/servers/{server_id}/files` | Browse files below the server root |
 | `minecraft_read_file` | GET | `/v1/minecraft/servers/{server_id}/files/read` | Read diagnostic text files and `.log.gz` |
 
-File access is restricted to the configured Minecraft server directory. Traversal and
+Event history is persisted by the manager in `logs/events/YYYY-MM-DD.log` and includes player activity plus server lifecycle actions from Telegram, Control API and auto-stop.\n\nFile access is restricted to the configured Minecraft server directory. Traversal and
 symlink escapes are rejected, common secret/key files are blocked, and obvious
 password/token assignments are redacted.
 
