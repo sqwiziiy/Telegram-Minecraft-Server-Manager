@@ -7,7 +7,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from config import ADMIN_IDS, BOT_TOKEN, JARVIS_API_ENABLED
+from config import ADMIN_IDS, BOT_TOKEN, CONTROL_API_ENABLED
 from handlers import console, mods, start, status, system
 from middlewares.auth import AuthMiddleware
 from services.access_control import access_control
@@ -123,14 +123,14 @@ async def main() -> None:
         asyncio.create_task(_log_monitor_task(), name="log_monitor"),
     ]
 
-    if JARVIS_API_ENABLED:
+    if CONTROL_API_ENABLED:
         from services.control_api import run_control_api
 
         tasks.append(
             asyncio.create_task(run_control_api(), name="jarvis_control_api")
         )
     else:
-        logger.info("Jarvis control API is disabled")
+        logger.info("External control API is disabled")
 
     try:
         await dp.start_polling(bot, skip_updates=True)
