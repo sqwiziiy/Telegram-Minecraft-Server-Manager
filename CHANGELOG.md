@@ -12,7 +12,7 @@ All notable changes to this project are documented here.
 - `OWNER_IDS` for full-access owners while keeping legacy `ADMIN_IDS` compatibility.
 - Permission-aware Telegram menus and read-only mod listings.
 - Unit tests for access policy resolution and operator UI visibility.
-- Compact per-server live event feed that keeps the latest 10 join/leave/chat/death events in one editable Telegram message.
+- Persistent per-server event history with daily `logs/events/YYYY-MM-DD.log` files.\n- Separate Telegram `📋 События` tab with recent activity, refresh and today's downloadable log.\n- Server lifecycle audit entries for Telegram/API start, stop, restart, server-ready, auto-stop and manager detection.
 - Multi-server registry with independent process/RCON configuration per server.
 - Event-driven empty-server auto-stop with Telegram controls and persisted timeout settings.
 - Optional bearer-authenticated external Control API with stable OpenAPI operation IDs for bots, AI agents, Open WebUI/Jarvis, automation systems and scripts.
@@ -31,7 +31,7 @@ All notable changes to this project are documented here.
 - Sensitive handlers and callbacks enforce permissions server-side; hidden buttons are not treated as an authorization boundary.
 - Unknown users, roles and permission names fail closed.
 - The default `operator` role cannot use RCON, upload/delete mods, view launch logs or create backups.
-- Live log forwarding follows the `logs.view` permission.
+- Persistent event-history access is controlled separately by `events.view`; raw manager launch logs still require `logs.view`.
 
 ### Migration
 

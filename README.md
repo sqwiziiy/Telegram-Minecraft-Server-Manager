@@ -33,7 +33,7 @@ No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR 
 | 💻 RCON console | Run Minecraft commands from an isolated Telegram console mode |
 | 🧩 Mod manager | List, upload and delete `.jar` mods |
 | 💾 Backups | Create RCON-coordinated ZIP backups with saves paused and flushed |
-| 📜 Logs | Show launch output and forward selected player/chat/death events |
+| 📜 Logs | Show launch output without mixing it with the activity history |\n| 📋 Event history | Separate Telegram tab with persistent daily join/leave/chat/death and server lifecycle logs |
 | ⏱ Auto-stop | Stop an empty server after a configurable timeout, driven locally by join/leave events |
 | 🔌 Control API | Optional bearer-authenticated HTTP/OpenAPI interface for bots, AI agents and scripts |
 | 🔐 Access control | `OWNER_IDS` plus per-user roles and permissions from `users.json` |
@@ -104,7 +104,7 @@ cp users.example.json users.json
 nano users.json
 ```
 
-Example for a friend who may start, stop and restart the server and **only view mods**:
+Example for a friend who may start, stop and restart the server and view **mods plus the separate event history**:
 
 ```json
 {
@@ -132,7 +132,7 @@ The built-in `operator` role grants only:
 - `server.autostop`
 - `mods.view`
 
-It does not grant RCON console access, mod upload/delete, logs, host system information or backups. Unauthorized buttons are hidden, and every sensitive handler/callback also checks the permission server-side.
+It can view the separate server event history, but does not grant RCON console access, mod upload/delete, raw launch logs, host system information or backups. Unauthorized buttons are hidden, and every sensitive handler/callback also checks the permission server-side.
 
 Use `role: "custom"` for an empty baseline, or adjust a preset with `allow` and `deny`. `deny` always wins.
 
@@ -162,7 +162,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**. Auto-stop is configured from the same server screen through **⏱ Auto-stop** and works without the external API or any AI client.
+The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**. Auto-stop is configured from the same server screen through **⏱ Auto-stop** and works without the external API or any AI client. **📋 События** opens a separate persistent activity/history view; daily files are stored under `logs/events/YYYY-MM-DD.log` inside each server directory.
 
 ## Running the bot with systemd
 
@@ -236,7 +236,7 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 │   ├── auto_stop.py
 │   ├── backup.py
 │   ├── control_api.py
-│   ├── event_feed.py
+│   ├── event_history.py
 │   ├── log_monitor.py
 │   ├── rcon.py
 │   ├── server_process.py
@@ -271,7 +271,7 @@ other bots, dashboards, automation systems or local scripts. The OpenAPI schema 
 stable operation IDs such as `minecraft_status`, `minecraft_set_auto_stop` and
 `minecraft_rcon`, so AI/agent clients can import them as tools.
 
-Read-only file inspection is also available for crash reports, logs and configuration
+Read-only event history is available through `minecraft_events`. File inspection is also available for crash reports, logs and configuration
 diagnostics, with traversal protection and secret redaction.
 
 See **[docs/CONTROL_API.md](docs/CONTROL_API.md)** for configuration, authentication,

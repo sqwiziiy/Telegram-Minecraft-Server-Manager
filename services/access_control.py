@@ -18,6 +18,7 @@ ALL_PERMISSIONS = frozenset({
     "server.autostop",
     "system.view",
     "logs.view",
+    "events.view",
     "console.use",
     "mods.view",
     "mods.upload",
@@ -35,6 +36,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "server.stop",
         "server.restart",
         "server.autostop",
+        "events.view",
         "mods.view",
     }),
     "viewer": frozenset({

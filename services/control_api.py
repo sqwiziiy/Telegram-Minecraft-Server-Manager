@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from config import CONTROL_API_HOST, CONTROL_API_PORT, CONTROL_API_TOKEN
 from services.auto_stop import auto_stop_manager
+from services.event_history import event_history
 from services.server_registry import ManagedServer, server_registry
 
 logger = logging.getLogger(__name__)
@@ -240,6 +241,12 @@ async def _action_result(action: str, server: ManagedServer | None = None) -> di
         ) from exc
 
     await auto_stop_manager.on_server_action(target, action, result)
+    await event_history.record_action(
+        target,
+        action=action,
+        result=result,
+        source="Control API",
+    )
     payload = await _status_payload(target)
     payload["result"] = result
     return payload
@@ -297,6 +304,31 @@ async def minecraft_get_auto_stop(
     return {
         **_identity(server),
         **auto_stop_manager.status(server),
+    }
+
+
+@app.get(
+    "/v1/minecraft/servers/{server_id}/events",
+    dependencies=[Depends(_require_bearer)],
+    operation_id="minecraft_events",
+    summary="Read recent persistent server events",
+)
+async def minecraft_events(
+    server_id: str = Path(description="Stable server id returned by minecraft_list_servers"),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict:
+    server = _get_server(server_id)
+    entries = await event_history.recent(server, limit=limit)
+    return {
+        **_identity(server),
+        "events": [
+            {
+                "timestamp": entry.timestamp,
+                "kind": entry.kind,
+                "text": entry.text,
+            }
+            for entry in entries
+        ],
     }
 
 
@@ -521,6 +553,15 @@ async def minecraft_set_auto_stop(
 ) -> dict:
     server = _get_server(server_id)
     state = await auto_stop_manager.set_timeout(server, request.timeout_seconds)
+    if request.timeout_seconds:
+        setting = f"{request.timeout_seconds} сек без игроков"
+    else:
+        setting = "выключен"
+    await event_history.record(
+        server,
+        kind="auto_stop_setting",
+        text=f"Auto-stop: {setting} · Control API",
+    )
     return {
         **_identity(server),
         **state,

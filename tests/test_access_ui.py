@@ -19,12 +19,13 @@ class AccessUiTests(unittest.TestCase):
 
     def test_server_home_hides_unpermitted_actions(self) -> None:
         server = SimpleNamespace(server_id="storm", server_name="Storm")
-        allowed = {"server.status", "mods.view"}
+        allowed = {"server.status", "mods.view", "events.view"}
         with patch.object(access_control, "can_server", side_effect=lambda uid, sid, perm: perm in allowed):
             keyboard = server_home_keyboard(server, 222)
         callbacks = {button.callback_data for row in keyboard.inline_keyboard for button in row}
         self.assertIn("status:storm", callbacks)
         self.assertIn("mods:storm", callbacks)
+        self.assertIn("events:storm", callbacks)
         self.assertNotIn("manage:storm", callbacks)
         self.assertNotIn("console:storm", callbacks)
 
