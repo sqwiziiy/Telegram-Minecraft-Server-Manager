@@ -137,7 +137,7 @@ async def main() -> None:
         from services.control_api import run_control_api
 
         tasks.append(
-            asyncio.create_task(run_control_api(), name="jarvis_control_api")
+            asyncio.create_task(run_control_api(), name="control_api")
         )
     else:
         logger.info("External control API is disabled")
