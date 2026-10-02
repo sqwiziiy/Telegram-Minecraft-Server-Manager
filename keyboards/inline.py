@@ -19,6 +19,8 @@ def server_home_keyboard(server: ManagedServer, user_id: int) -> InlineKeyboardM
         rows.append([InlineKeyboardButton(text="📊 Статус", callback_data=f"status:{sid}")])
     if any(access_control.can_server(user_id, sid, p) for p in ("server.start", "server.stop", "server.restart")):
         rows.append([InlineKeyboardButton(text="⚙️ Управление", callback_data=f"manage:{sid}")])
+    if access_control.can_server(user_id, sid, "server.autostop"):
+        rows.append([InlineKeyboardButton(text="⏱ Auto-stop", callback_data=f"autostop:{sid}")])
     utility = []
     for label, perm, action in (("💻 Консоль", "console.use", "console"), ("🧩 Моды", "mods.view", "mods"), ("📜 Логи", "logs.view", "logs"), ("💾 Бэкап", "backup.create", "backup")):
         if access_control.can_server(user_id, sid, perm):
@@ -69,3 +71,23 @@ def mod_delete_confirm_keyboard(server_id: str, idx: int) -> InlineKeyboardMarku
         InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"dm_ok:{server_id}:{idx}"),
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"mods:{server_id}"),
     ]])
+
+
+def auto_stop_keyboard(server_id: str, current_seconds: int) -> InlineKeyboardMarkup:
+    options = (
+        ("🚫 Выкл", 0),
+        ("1 мин", 60),
+        ("2 мин", 120),
+        ("5 мин", 300),
+        ("10 мин", 600),
+    )
+    buttons = [
+        InlineKeyboardButton(
+            text=("✅ " if seconds == current_seconds else "") + label,
+            callback_data=f"autostop_set:{seconds}:{server_id}",
+        )
+        for label, seconds in options
+    ]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
