@@ -104,7 +104,7 @@ cp users.example.json users.json
 nano users.json
 ```
 
-Example for a friend who may start, stop and restart the server and **only view mods**:
+Example for a friend who may start, stop and restart the server and view **mods plus the separate event history**:
 
 ```json
 {
