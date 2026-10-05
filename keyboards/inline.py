@@ -104,3 +104,20 @@ def events_keyboard(server_id: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")],
         ]
     )
+
+
+def logs_keyboard(server_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"logs:{server_id}")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")],
+        ]
+    )
+
+
+def back_to_server_keyboard(server_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")],
+        ]
+    )
