@@ -168,6 +168,8 @@ The Minecraft server is then started from Telegram → **/start** → choose a s
 
 Using systemd for the **bot** is still useful. Only Minecraft process control was removed from systemd.
 
+**Important:** the bot launches Minecraft as a child process and later reconnects to it through the persisted PID record. Therefore the bot unit must use `KillMode=process`. The systemd default, `KillMode=control-group`, kills the Minecraft Java process together with the Telegram bot on `systemctl stop`, restart, or a service restart after failure. With `KillMode=process`, stopping/restarting the bot only terminates the bot's main Python process; Minecraft remains running and the next bot instance detects the same managed server.
+
 ```ini
 [Unit]
 Description=Telegram Minecraft Server Manager
@@ -183,9 +185,16 @@ EnvironmentFile=/opt/telegram-minecraft-server-manager/.env
 Restart=on-failure
 RestartSec=5
 
+# Minecraft processes are deliberately independent from the bot lifecycle.
+# Without this, systemd's default KillMode=control-group kills Java when the
+# Telegram manager is stopped or restarted.
+KillMode=process
+
 [Install]
 WantedBy=multi-user.target
 ```
+
+A ready-to-copy example is also available at `deploy/systemd/telegram-minecraft-server-manager.service`.
 
 In modern mode, the `mcbot` user must have normal filesystem permissions for every configured server's `server_dir`, mods, world, backups, Minecraft/manager logs and PID file paths from `servers.json`. The legacy `.env` fallback uses the corresponding legacy paths. It does not need passwordless sudo just to control Minecraft.
 
