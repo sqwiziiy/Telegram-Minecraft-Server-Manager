@@ -1,0 +1,20 @@
+[Unit]
+Description=Telegram Minecraft Server Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcbot
+WorkingDirectory=/opt/telegram-minecraft-server-manager
+ExecStart=/opt/telegram-minecraft-server-manager/.venv/bin/python main.py
+EnvironmentFile=/opt/telegram-minecraft-server-manager/.env
+Restart=on-failure
+RestartSec=5
+
+# Critical: keep Minecraft Java processes alive when the Telegram manager
+# is stopped, restarted, or crashes. The manager reconnects using its PID file.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
