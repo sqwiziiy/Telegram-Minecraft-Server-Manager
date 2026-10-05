@@ -20,6 +20,8 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- The documented systemd unit now uses `KillMode=process` so stopping or restarting the Telegram manager no longer kills Minecraft Java processes that it launched.
+
 - Live Minecraft events now edit a single feed message instead of creating a new Telegram message for every event.
 - Event lines are parsed into compact join/leave/chat/death entries while preserving the original death reason.
 - Auto-stop runs locally inside the manager and does not depend on an AI client or recurring API polling.
