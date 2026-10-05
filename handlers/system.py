@@ -1,13 +1,22 @@
 import asyncio
 import html
 import logging
+from pathlib import Path
 
 import psutil
 from aiogram import Router
 from aiogram.types import CallbackQuery, FSInputFile
 
+from config import HOST_DISK_PATH
 from handlers.start import _home_text, _server_picker
-from keyboards.inline import auto_stop_keyboard, confirm_keyboard, events_keyboard, server_home_keyboard
+from keyboards.inline import (
+    auto_stop_keyboard,
+    back_to_server_keyboard,
+    confirm_keyboard,
+    events_keyboard,
+    logs_keyboard,
+    server_home_keyboard,
+)
 from middlewares.auth import deny_access
 from services.access_control import access_control
 from services.auto_stop import auto_stop_manager
@@ -57,7 +66,8 @@ async def host_info(callback: CallbackQuery) -> None:
         "🖥 <b>Хост</b>\n\n"
         f"CPU: <code>{info['cpu']:.1f}%</code>\n"
         f"RAM: <code>{ram.used / 1024**3:.1f}/{ram.total / 1024**3:.1f} ГБ ({ram.percent}%)</code>\n"
-        f"Диск: <code>{disk.used / 1024**3:.1f}/{disk.total / 1024**3:.1f} ГБ ({disk.percent}%)</code>"
+        f"Диск <code>{html.escape(info['disk_path'])}</code>: "
+        f"<code>{disk.used / 1024**3:.1f}/{disk.total / 1024**3:.1f} ГБ ({disk.percent}%)</code>"
     )
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Серверы", callback_data="servers")]]))
@@ -65,7 +75,14 @@ async def host_info(callback: CallbackQuery) -> None:
 
 
 def _collect_host_info() -> dict:
-    return {"cpu": psutil.cpu_percent(interval=0.3), "ram": psutil.virtual_memory(), "disk": psutil.disk_usage("/")}
+    configured = Path(HOST_DISK_PATH).expanduser()
+    disk_path = configured if configured.exists() else Path("/")
+    return {
+        "cpu": psutil.cpu_percent(interval=0.3),
+        "ram": psutil.virtual_memory(),
+        "disk": psutil.disk_usage(str(disk_path)),
+        "disk_path": str(disk_path),
+    }
 
 
 def _telegram_actor(user) -> str:
@@ -308,7 +325,12 @@ async def server_logs(callback: CallbackQuery) -> None:
         await deny_access(callback)
         return
     output = await server.manager.tail_output(30) or "(лог запуска пока пуст)"
-    await callback.message.answer(f"📜 <b>Логи · {html.escape(server.server_name)}</b>\n\n<pre>{html.escape(output[-3500:])}</pre>", parse_mode="HTML")
+    await callback.message.edit_text(
+        f"📜 <b>Логи · {html.escape(server.server_name)}</b>\n\n"
+        f"<pre>{html.escape(output[-3500:])}</pre>",
+        parse_mode="HTML",
+        reply_markup=logs_keyboard(server_id),
+    )
     await callback.answer()
 
 
@@ -323,5 +345,18 @@ async def server_backup(callback: CallbackQuery) -> None:
         await deny_access(callback)
         return
     await callback.answer()
-    status = await callback.message.answer(f"⏳ Создаю бэкап мира · {html.escape(server.server_name)}…", parse_mode="HTML")
-    await status.edit_text(await create_backup(server), parse_mode="HTML", reply_markup=server_home_keyboard(server, callback.from_user.id))
+    await callback.message.edit_text(
+        f"⏳ Создаю бэкап мира · {html.escape(server.server_name)}…",
+        parse_mode="HTML",
+    )
+    try:
+        result = await create_backup(server)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Backup failed for %s", server_id)
+        result = f"❌ Ошибка бэкапа: <code>{html.escape(str(exc))}</code>"
+
+    await callback.message.edit_text(
+        result,
+        parse_mode="HTML",
+        reply_markup=back_to_server_keyboard(server_id),
+    )

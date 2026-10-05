@@ -102,6 +102,10 @@ WORLD_DIR: str = os.getenv("WORLD_DIR", str(Path(SERVER_DIR) / "world"))
 BACKUP_DIR: str = os.getenv("BACKUP_DIR", str(Path(SERVER_DIR) / "backups"))
 MAX_MOD_UPLOAD_MB: int = max(1, int(os.getenv("MAX_MOD_UPLOAD_MB", "100")))
 
+# Host dashboard disk path. /home is often the useful data filesystem on
+# self-hosted Linux machines; override this when another mount should be shown.
+HOST_DISK_PATH: str = os.getenv("HOST_DISK_PATH", "/home").strip() or "/home"
+
 # ===== Optional external Control API =====
 # CONTROL_API_* is the generic v1.1+ naming. Existing JARVIS_API_* settings are
 # still accepted so current Jarvis/Open WebUI installations keep working.

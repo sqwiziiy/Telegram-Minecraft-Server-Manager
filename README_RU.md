@@ -33,7 +33,8 @@ SERVER_START_COMMAND=java -Xms2G -Xmx6G -jar fabric-server-launch.jar nogui
 | 💻 RCON-консоль | Выполнение Minecraft-команд из Telegram |
 | 🧩 Моды | Просмотр, загрузка и удаление `.jar` |
 | 💾 Бэкапы | Согласованный ZIP-бэкап через `save-off` → `save-all flush` → `save-on` |
-| 📜 Логи | Последние строки запуска отдельно от истории активности |\n| 📋 История событий | Отдельная вкладка Telegram + постоянные дневные логи входов/выходов/смертей/чата и запусков/остановок |
+| 📜 Логи | Последние строки запуска в той же панели Telegram с обновлением и кнопкой «Назад» |
+| 📋 История событий | Отдельная вкладка Telegram + постоянные дневные логи входов/выходов/смертей/чата и запусков/остановок |
 | ⏱ Auto-stop | Локально выключает пустой сервер после заданного таймаута по событиям входа/выхода |
 | 🔌 Control API | Опциональный HTTP/OpenAPI интерфейс с Bearer auth для ботов, ИИ-агентов и скриптов |
 | 🔐 Доступ | `OWNER_IDS` + роли и отдельные permissions из `users.json` |
@@ -168,6 +169,8 @@ python main.py
 
 Для бота systemd оставить полезно. Мы убрали зависимость от systemd только для управления Minecraft.
 
+**Важно:** Minecraft запускается ботом как дочерний процесс, а после перезапуска бот находит его по сохранённому PID-файлу. Поэтому в unit самого бота обязательно нужен `KillMode=process`. Дефолтный `KillMode=control-group` у systemd при остановке или рестарте сервиса убивает не только Python-бота, но и запущенную им Java. С `KillMode=process` перезапускается только бот, Minecraft продолжает работать, а новый экземпляр менеджера подхватывает уже запущенный сервер.
+
 ```ini
 [Unit]
 Description=Telegram Minecraft Server Manager
@@ -183,9 +186,15 @@ EnvironmentFile=/opt/telegram-minecraft-server-manager/.env
 Restart=on-failure
 RestartSec=5
 
+# Minecraft должен жить независимо от процесса Telegram-бота.
+# Иначе дефолтный KillMode=control-group убьёт Java при stop/restart бота.
+KillMode=process
+
 [Install]
 WantedBy=multi-user.target
 ```
+
+Готовый пример unit также лежит в `deploy/systemd/telegram-minecraft-server-manager.service`.
 
 В современном режиме пользователю `mcbot` нужны обычные права на `server_dir`, папки модов, мира, бэкапов, Minecraft/manager-логи и PID-файлы каждого сервера из `servers.json`. Legacy fallback использует соответствующие старые пути из `.env`. Passwordless sudo для управления Minecraft больше не нужен.
 
@@ -194,11 +203,14 @@ WantedBy=multi-user.target
 | Переменная | Что задаёт |
 | --- | --- |
 | `BOT_TOKEN` | Токен Telegram-бота |
-| `OWNER_IDS` | Telegram ID владельцев с полным доступом |\n| `ADMIN_IDS` | Legacy-список полного доступа для совместимости с v1.0 |\n| `ACCESS_USERS_FILE` | Путь к `users.json` с ролями и permissions |
+| `OWNER_IDS` | Telegram ID владельцев с полным доступом |
+| `ADMIN_IDS` | Legacy-список полного доступа для совместимости с v1.0 |
+| `ACCESS_USERS_FILE` | Путь к `users.json` с ролями и permissions |
 | `MINECRAFT_SERVERS_FILE` | JSON-реестр всех серверов |
 | `DEFAULT_SERVER_ID` | ID сервера по умолчанию; должен быть в реестре |
 | `SERVER_*`, `RCON_*` и переменные путей | Устаревший fallback, только если реестр отсутствует/пуст |
 | `MAX_MOD_UPLOAD_MB` | Максимальный размер загружаемого мода |
+| `HOST_DISK_PATH` | Путь файловой системы для строки диска в `🖥 Хост`; по умолчанию `/home` |
 | `AUTO_STOP_STATE_FILE` | Файл сохранённого состояния auto-stop |
 | `AUTO_STOP_DEFAULT_SECONDS` | Таймаут пустого сервера по умолчанию; `0` отключает функцию |
 | `CONTROL_API_ENABLED` | Включить опциональный внешний HTTP Control API |
@@ -252,7 +264,7 @@ WantedBy=multi-user.target
 
 Один бот показывает пользователю только назначенные ему серверы. Права в `users.json` задаются внутри `servers`; владельцы и legacy-администраторы имеют полный доступ ко всем серверам. Старый профиль без `servers` действует только для сервера по умолчанию. При одновременном запуске нескольких серверов используйте уникальные RCON-порты.
 
-Информация о CPU/RAM/диске хоста глобальна и доступна только владельцам и legacy-администраторам через кнопку `🖥 Хост`; доступ к отдельному Minecraft-серверу её не выдаёт.
+Информация о CPU/RAM/диске хоста глобальна и доступна только владельцам и legacy-администраторам через кнопку `🖥 Хост`; доступ к отдельному Minecraft-серверу её не выдаёт. Для диска используется `HOST_DISK_PATH` (по умолчанию `/home`), а `/` берётся только как fallback, если указанный путь не существует.
 
 ## Границы проекта
 
