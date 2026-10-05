@@ -33,7 +33,8 @@ No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR 
 | 💻 RCON console | Run Minecraft commands from an isolated Telegram console mode |
 | 🧩 Mod manager | List, upload and delete `.jar` mods |
 | 💾 Backups | Create RCON-coordinated ZIP backups with saves paused and flushed |
-| 📜 Logs | Show launch output without mixing it with the activity history |\n| 📋 Event history | Separate Telegram tab with persistent daily join/leave/chat/death and server lifecycle logs |
+| 📜 Logs | Show launch output in the same Telegram panel with refresh/back navigation |
+| 📋 Event history | Separate Telegram tab with persistent daily join/leave/chat/death and server lifecycle logs |
 | ⏱ Auto-stop | Stop an empty server after a configurable timeout, driven locally by join/leave events |
 | 🔌 Control API | Optional bearer-authenticated HTTP/OpenAPI interface for bots, AI agents and scripts |
 | 🔐 Access control | `OWNER_IDS` plus per-user roles and permissions from `users.json` |
@@ -203,11 +204,14 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 | Variable | Purpose |
 | --- | --- |
 | `BOT_TOKEN` | Telegram bot token |
-| `OWNER_IDS` | Full-access owner Telegram IDs, comma-separated |\n| `ADMIN_IDS` | Legacy full-access list kept for v1.0 compatibility |\n| `ACCESS_USERS_FILE` | Path to `users.json` with roles and permissions |
+| `OWNER_IDS` | Full-access owner Telegram IDs, comma-separated |
+| `ADMIN_IDS` | Legacy full-access list kept for v1.0 compatibility |
+| `ACCESS_USERS_FILE` | Path to `users.json` with roles and permissions |
 | `MINECRAFT_SERVERS_FILE` | JSON registry containing every server |
 | `DEFAULT_SERVER_ID` | Default server ID; must exist in the registry |
 | `SERVER_*`, `RCON_*`, path variables | Deprecated legacy fallback, used only when the registry is missing/empty |
 | `MAX_MOD_UPLOAD_MB` | Maximum Telegram mod upload size |
+| `HOST_DISK_PATH` | Filesystem path shown in the `🖥 Host` disk-usage row; defaults to `/home` |
 | `AUTO_STOP_STATE_FILE` | Persistent auto-stop override state |
 | `AUTO_STOP_DEFAULT_SECONDS` | Default empty-server timeout; `0` disables it |
 | `CONTROL_API_ENABLED` | Enable the optional external HTTP Control API |
@@ -261,7 +265,7 @@ All modern servers, including Storm Survival, are configured in `servers.json`. 
 
 One bot presents a server picker and only shows servers assigned to the current Telegram user. Access is configured per server in `users.json`; owners and legacy admins have full access to every configured server. A legacy user entry without `servers` applies only to the default server.
 
-Host CPU/RAM/disk information is global and is available only to owners and legacy admins through the top-level `🖥 Хост` button; it is not granted by access to an individual Minecraft server.
+Host CPU/RAM/disk information is global and is available only to owners and legacy admins through the top-level `🖥 Хост` button; it is not granted by access to an individual Minecraft server. Disk usage is measured for `HOST_DISK_PATH` (default `/home`) and falls back to `/` only if the configured path does not exist.
 
 Use unique RCON ports when multiple servers run simultaneously.
 
