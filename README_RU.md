@@ -168,6 +168,8 @@ python main.py
 
 Для бота systemd оставить полезно. Мы убрали зависимость от systemd только для управления Minecraft.
 
+**Важно:** Minecraft запускается ботом как дочерний процесс, а после перезапуска бот находит его по сохранённому PID-файлу. Поэтому в unit самого бота обязательно нужен `KillMode=process`. Дефолтный `KillMode=control-group` у systemd при остановке или рестарте сервиса убивает не только Python-бота, но и запущенную им Java. С `KillMode=process` перезапускается только бот, Minecraft продолжает работать, а новый экземпляр менеджера подхватывает уже запущенный сервер.
+
 ```ini
 [Unit]
 Description=Telegram Minecraft Server Manager
@@ -183,9 +185,15 @@ EnvironmentFile=/opt/telegram-minecraft-server-manager/.env
 Restart=on-failure
 RestartSec=5
 
+# Minecraft должен жить независимо от процесса Telegram-бота.
+# Иначе дефолтный KillMode=control-group убьёт Java при stop/restart бота.
+KillMode=process
+
 [Install]
 WantedBy=multi-user.target
 ```
+
+Готовый пример unit также лежит в `deploy/systemd/telegram-minecraft-server-manager.service`.
 
 В современном режиме пользователю `mcbot` нужны обычные права на `server_dir`, папки модов, мира, бэкапов, Minecraft/manager-логи и PID-файлы каждого сервера из `servers.json`. Legacy fallback использует соответствующие старые пути из `.env`. Passwordless sudo для управления Minecraft больше не нужен.
 
