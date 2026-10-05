@@ -20,6 +20,7 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- Telegram `📜 Logs` and `💾 Backup` now reuse the existing server panel message instead of creating extra chat messages; both provide consistent back navigation.\n- Host disk usage is now measured for configurable `HOST_DISK_PATH` (default `/home`) instead of always using `/`.\n
 - The documented systemd unit now uses `KillMode=process` so stopping or restarting the Telegram manager no longer kills Minecraft Java processes that it launched.
 
 - Live Minecraft events now edit a single feed message instead of creating a new Telegram message for every event.
