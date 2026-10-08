@@ -46,8 +46,19 @@ async def _files_for(server) -> list[str] | None:
     return _files(server.mods_dir)
 
 
-def _text(files: list[str], user_id: int, server_id: str) -> str:
-    text = "🧩 <b>Моды</b>\n\n" + ("\n".join(f"{i + 1}. <code>{html.escape(f)}</code>" for i, f in enumerate(files)) if files else "Папка модов пуста.")
+def _addon_software(server) -> str:
+    return getattr(server, "server_software", "mods")
+
+
+def _addon_labels(server) -> tuple[str, str, str]:
+    if _addon_software(server) == "plugins":
+        return "🔌 <b>Плагины</b>", "плагинов", "плагин"
+    return "🧩 <b>Моды</b>", "модов", "мод"
+
+
+def _text(files: list[str], user_id: int, server_id: str, *, software: str = "mods") -> str:
+    title, plural = ("🔌 <b>Плагины</b>", "плагинов") if software == "plugins" else ("🧩 <b>Моды</b>", "модов")
+    text = title + "\n\n" + ("\n".join(f"{i + 1}. <code>{html.escape(f)}</code>" for i, f in enumerate(files)) if files else f"Папка {plural} пуста.")
     if access_control.can_server(user_id, server_id, "mods.upload"):
         text += "\n\nОтправьте .jar для загрузки."
     return text
@@ -59,6 +70,9 @@ async def list_mods(callback: CallbackQuery, state: FSMContext) -> None:
     server = resolve_server(server_id)
     if server is None:
         await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if _addon_software(server) == "vanilla":
+        await callback.answer("🍃 Vanilla: моды и плагины отключены.", show_alert=True)
         return
     if not access_control.can_server(callback.from_user.id, server_id, "mods.view"):
         await deny_access(callback)
@@ -73,13 +87,13 @@ async def list_mods(callback: CallbackQuery, state: FSMContext) -> None:
         return
     if files is None:
         await callback.message.edit_text(
-            f"❌ Папка модов не найдена:\n<code>{html.escape(server.mods_dir)}</code>",
+            f"❌ Папка {_addon_labels(server)[1]} не найдена:\n<code>{html.escape(server.mods_dir)}</code>",
             parse_mode="HTML",
             reply_markup=mods_list_keyboard(0, callback.from_user.id, server_id),
         )
         await callback.answer()
         return
-    await callback.message.edit_text(_text(files, callback.from_user.id, server_id), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, server_id))
+    await callback.message.edit_text(_text(files, callback.from_user.id, server_id, software=_addon_software(server)), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, server_id))
     await callback.answer()
 
 
@@ -103,6 +117,9 @@ async def ask_delete(callback: CallbackQuery) -> None:
     if server is None:
         await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
         return
+    if _addon_software(server) == "vanilla":
+        await callback.answer("🍃 Vanilla: управление дополнениями отключено.", show_alert=True)
+        return
     if not access_control.can_server(callback.from_user.id, sid, "mods.delete"):
         await deny_access(callback)
         return
@@ -114,7 +131,7 @@ async def ask_delete(callback: CallbackQuery) -> None:
     if files is None or idx >= len(files):
         await callback.answer("Список модов изменился.", show_alert=True)
         return
-    await callback.message.edit_text(f"🗑 Удалить <code>{html.escape(files[idx])}</code>?", parse_mode="HTML", reply_markup=mod_delete_confirm_keyboard(sid, idx))
+    await callback.message.edit_text(f"🗑 Удалить {_addon_labels(server)[2]} <code>{html.escape(files[idx])}</code>?", parse_mode="HTML", reply_markup=mod_delete_confirm_keyboard(sid, idx))
     await callback.answer()
 
 
@@ -128,6 +145,9 @@ async def confirm_delete(callback: CallbackQuery) -> None:
     server = resolve_server(sid)
     if server is None:
         await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if _addon_software(server) == "vanilla":
+        await callback.answer("🍃 Vanilla: управление дополнениями отключено.", show_alert=True)
         return
     if not access_control.can_server(callback.from_user.id, sid, "mods.delete"):
         await deny_access(callback)
@@ -163,7 +183,7 @@ async def confirm_delete(callback: CallbackQuery) -> None:
             return
     await callback.answer("Удалено")
     files = await _files_for(server) or []
-    await callback.message.edit_text(_text(files, callback.from_user.id, sid), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, sid))
+    await callback.message.edit_text(_text(files, callback.from_user.id, sid, software=_addon_software(server)), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, sid))
 
 
 @router.message(ModsStates.awaiting_upload, F.document)
@@ -173,6 +193,10 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
     server = resolve_server(sid)
     if server is None:
         await message.answer("❌ Сервер больше не настроен.")
+        await state.clear()
+        return
+    if _addon_software(server) == "vanilla":
+        await message.answer("🍃 Vanilla: загрузка модов и плагинов отключена.")
         await state.clear()
         return
     if not access_control.can_server(message.from_user.id, sid, "mods.upload"):
@@ -187,7 +211,7 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
         await message.answer(f"❌ Файл больше лимита {MAX_MOD_UPLOAD_MB} MB.")
         return
     if server.ssh_remote is not None:
-        status = await message.answer("⏳ Загружаю мод на удалённый сервер…")
+        status = await message.answer(f"⏳ Загружаю {_addon_labels(server)[2]} на удалённый сервер…")
         fd, temp_path = tempfile.mkstemp(prefix=".remote-mod-", suffix=".jar")
         os.close(fd)
         try:
@@ -196,7 +220,7 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
             files = await _files_for(server) or []
             await status.edit_text(
                 f"✅ <code>{html.escape(safe_name)}</code> загружен на удалённый сервер.\n\n"
-                f"{_text(files, message.from_user.id, sid)}",
+                f"{_text(files, message.from_user.id, sid, software=_addon_software(server))}",
                 parse_mode="HTML",
                 reply_markup=mods_list_keyboard(len(files), message.from_user.id, sid),
             )
@@ -220,9 +244,9 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Недопустимый путь.")
         return
     if os.path.lexists(target):
-        await message.answer("⚠️ Такой мод уже существует.")
+        await message.answer("⚠️ Такой файл уже существует.")
         return
-    status = await message.answer("⏳ Загружаю мод…")
+    status = await message.answer(f"⏳ Загружаю {_addon_labels(server)[2]}…")
     fd, temp_path = tempfile.mkstemp(prefix=".upload-", suffix=".tmp", dir=server.mods_dir)
     os.close(fd)
     try:
