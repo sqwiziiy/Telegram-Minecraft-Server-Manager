@@ -108,6 +108,29 @@ WORLD_DIR: str = os.getenv("WORLD_DIR", str(Path(SERVER_DIR) / "world"))
 BACKUP_DIR: str = os.getenv("BACKUP_DIR", str(Path(SERVER_DIR) / "backups"))
 MAX_MOD_UPLOAD_MB: int = max(1, int(os.getenv("MAX_MOD_UPLOAD_MB", "100")))
 
+# Optional automatic backup retention. Zero means unlimited/disabled.
+# Limits are independent: when both are set, both must be satisfied.
+def _nonnegative_retention_value(name: str, *, integer: bool) -> float | int:
+    import math
+
+    raw = os.getenv(name, "0").strip()
+    try:
+        value = int(raw) if integer else float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a non-negative number") from exc
+    if not math.isfinite(value) or not 0 <= value <= 1_000_000:
+        raise RuntimeError(f"{name} must be between 0 and 1,000,000")
+    return value
+
+
+BACKUP_RETENTION_MAX_COUNT: int = int(
+    _nonnegative_retention_value("BACKUP_RETENTION_MAX_COUNT", integer=True)
+)
+# One GiB = 1024**3 bytes. Keep this name for familiar .env configuration.
+BACKUP_RETENTION_MAX_GB: float = float(
+    _nonnegative_retention_value("BACKUP_RETENTION_MAX_GB", integer=False)
+)
+
 # Host dashboard disk path. /home is often the useful data filesystem on
 # self-hosted Linux machines; override this when another mount should be shown.
 HOST_DISK_PATH: str = os.getenv("HOST_DISK_PATH", "/home").strip() or "/home"
