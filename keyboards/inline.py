@@ -4,8 +4,11 @@ from services.access_control import access_control
 from services.server_registry import ManagedServer
 
 
-def server_list_keyboard(servers: list[ManagedServer], statuses: dict[str, bool], *, show_host: bool = False) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=f"{'🟢' if statuses.get(s.server_id, False) else '⚫'} {s.server_name}", callback_data=f"sv:{s.server_id}")] for s in servers]
+def server_list_keyboard(servers: list[ManagedServer], statuses: dict[str, bool | None], *, show_host: bool = False) -> InlineKeyboardMarkup:
+    def state_icon(value: bool | None) -> str:
+        return "❔" if value is None else ("🟢" if value else "⚫")
+
+    rows = [[InlineKeyboardButton(text=f"{state_icon(statuses.get(s.server_id))} {s.server_name}", callback_data=f"sv:{s.server_id}")] for s in servers]
     rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="sv_refresh")])
     if show_host:
         rows.append([InlineKeyboardButton(text="🖥 Хост", callback_data="host")])
