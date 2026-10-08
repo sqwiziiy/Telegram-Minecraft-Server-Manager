@@ -25,6 +25,7 @@ from scripts.manage_servers import (
     validate_port,
 )
 from services.remote_ssh import SSHRemote, SSHSettings
+from services.server_software import choose_software, SOFTWARE_NAMES
 
 
 async def _remote_setup(project_dir: Path, servers_path: Path, raw_config: bytes | None,
@@ -80,6 +81,9 @@ async def _remote_setup(project_dir: Path, servers_path: Path, raw_config: bytes
     command = ask_text("Команда запуска", default_cmd)
     if not command:
         raise ConfigurationError("Команда запуска не может быть пустой")
+    server_software = choose_software(
+        bool(info.get("has_mods", False)), bool(info.get("has_plugins", False))
+    )
 
     print("Порт должен быть свободен именно НА удалённом компьютере.")
     def_port = validate_port(props.get("server-port", 25565), "Minecraft port")
@@ -144,7 +148,7 @@ async def _remote_setup(project_dir: Path, servers_path: Path, raw_config: bytes
     })
 
     entry = {
-        "id": sid, "name": name, "type": "ssh",
+        "id": sid, "name": name, "type": "ssh", "server_software": server_software,
         "ssh": {
             "host": host, "user": user, "port": ssh_port,
             "key_file": str(Path(key_file).expanduser().resolve()),
@@ -165,6 +169,7 @@ async def _remote_setup(project_dir: Path, servers_path: Path, raw_config: bytes
     print(f"SSH: {user}@{host}:{ssh_port} (проверка известного host key обязательна)")
     print(f"Папка: {directory} · Название: {name} · ID: {sid}")
     print(f"Запуск: {command} · Minecraft: {game_port}/TCP · RCON: localhost:{rcon_port}")
+    print(f"Тип Minecraft: {SOFTWARE_NAMES[server_software]}")
     print(f"RCON-пароль скрыт; локальная переменная: {rcon_key}")
     print("Автостоп и автоматическое удаление бэкапов по умолчанию выключены.")
     print("Изменяем: локальные servers.json/.env и УДАЛЁННЫЙ server.properties.")
