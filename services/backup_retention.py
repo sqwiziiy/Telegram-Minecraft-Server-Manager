@@ -13,7 +13,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 AUTO_BACKUP_PREFIX = "world_auto_backup_"
-_AUTO_ARCHIVE_NAME = re.compile(r"^world_auto_backup_\\d{8}_\\d{6}_\\d{6}\\.zip$")
+_AUTO_ARCHIVE_NAME = re.compile(r"^world_auto_backup_\d{8}_\d{6}_\d{6}\.zip$")
 
 
 @dataclass(frozen=True)
