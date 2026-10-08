@@ -67,15 +67,40 @@ class SSHRemote:
             "agent_forwarding": False,
         }
 
+    async def _connect(self):
+        try:
+            return await asyncssh.connect(**self._connection_kwargs())
+        except asyncssh.PermissionDenied as exc:
+            raise ConnectionError(
+                f"SSH authentication rejected for {self.settings.user}@{self.settings.host}. "
+                f"Check key_file ({self.settings.key_file}), authorized_keys and the "
+                "service user's SSH access without an interactive agent."
+            ) from exc
+        except (asyncssh.Error, OSError, asyncio.TimeoutError) as exc:
+            raise ConnectionError(
+                f"SSH connection to {self.settings.user}@{self.settings.host}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
     async def request(self, action: str, *, timeout: float = 90, **params):
         request = {"action": action, "config": self.config, **params}
-        async with asyncssh.connect(**self._connection_kwargs()) as conn:
-            result = await conn.run(
-                _agent_command(),
-                input=json.dumps(request, ensure_ascii=False),
-                timeout=timeout,
-                check=False,
+        try:
+            async with await self._connect() as conn:
+                result = await conn.run(
+                    _agent_command(),
+                    input=json.dumps(request, ensure_ascii=False),
+                    timeout=timeout,
+                    check=False,
+                )
+        except (asyncssh.Error, OSError, asyncio.TimeoutError) as exc:
+            uncertainty = (
+                " Operation may have completed remotely: refresh server status before retrying."
+                if action in {"start", "stop", "restart", "backup", "configure_properties"}
+                else ""
             )
+            raise ConnectionError(
+                f"SSH {action} transport failed: {type(exc).__name__}: {exc}.{uncertainty}"
+            ) from exc
         if not result.stdout.strip():
             raise RuntimeError(f"SSH agent {action} returned no response: {result.stderr[-500:]}")
         try:
@@ -98,18 +123,26 @@ class SSHRemote:
         temp_name = ".upload-" + secrets.token_hex(12)
         mod_dir = self.config["mods_dir"].rstrip("/")
         temp_path = mod_dir + "/" + temp_name
-        async with asyncssh.connect(**self._connection_kwargs()) as conn:
-            async with conn.start_sftp_client() as sftp:
-                try:
-                    await sftp.put(source_path, temp_path)
-                    return await self._request_on_connection(
-                        conn, "commit_mod", filename=filename, temporary_name=temp_name
-                    )
-                finally:
-                    try:
-                        await sftp.remove(temp_path)
-                    except (OSError, asyncssh.SFTPError):
-                        pass
+        try:
+            # SFTP or remote commit must not hang the Telegram callback forever.
+            async with asyncio.timeout(300):
+                async with await self._connect() as conn:
+                    async with conn.start_sftp_client() as sftp:
+                        try:
+                            await sftp.put(source_path, temp_path)
+                            return await self._request_on_connection(
+                                conn, "commit_mod", filename=filename, temporary_name=temp_name
+                            )
+                        finally:
+                            try:
+                                await sftp.remove(temp_path)
+                            except (OSError, asyncssh.SFTPError):
+                                pass
+        except (asyncssh.Error, OSError, asyncio.TimeoutError) as exc:
+            raise ConnectionError(
+                f"SSH/SFTP upload interrupted ({type(exc).__name__}). "
+                "Check the mods/plugins list before uploading again."
+            ) from exc
 
     async def _request_on_connection(self, conn, action: str, **params):
         result = await conn.run(
@@ -129,13 +162,14 @@ class SSHRemote:
     async def follow_log(self, path: str) -> AsyncIterator[str]:
         # tail is provided by coreutils on supported Linux remote hosts.
         # This session is deliberately long-lived; main.py retries on drop.
-        async with asyncssh.connect(**self._connection_kwargs()) as conn:
+        async with await self._connect() as conn:
             process = await conn.create_process("tail -n 0 -F -- " + shlex.quote(path))
             try:
                 async for line in process.stdout:
                     yield line.rstrip("\n")
             finally:
                 process.close()
+                await process.wait_closed()
 
 
 class RemoteServerProcessManager:
