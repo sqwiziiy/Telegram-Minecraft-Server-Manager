@@ -141,6 +141,10 @@ _KIND_ICON = {
     "server_stopping": "⏳",
     "auto_stop": "🌙",
     "auto_stop_setting": "⏱",
+    "auto_backup": "💾",
+    "auto_backup_pending": "⏳",
+    "auto_backup_error": "❌",
+    "auto_backup_setting": "⚙️",
     "manager_detected": "🔎",
 }
 
