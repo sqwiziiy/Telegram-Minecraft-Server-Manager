@@ -11,14 +11,15 @@ import argparse
 import copy
 import json
 import os
-import shutil
 import stat
+import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_DIR))
+from scripts.config_backups import save_config_backup  # noqa: E402
 
 # Keep in sync with services/access_control.py. Host system.view is intentionally
 # absent: only OWNER_IDS and legacy ADMIN_IDS can access global host data.
@@ -124,7 +125,10 @@ def load_users(path: Path) -> tuple[dict[str, Any], bytes | None]:
     return result, source
 
 
-def atomic_save(path: Path, data: dict[str, Any], original: bytes | None) -> Path | None:
+def atomic_save(
+    path: Path, data: dict[str, Any], original: bytes | None,
+    backup_dir: Path | None = None,
+) -> Path | None:
     """Refuse concurrent edits; back up existing file; atomically replace it."""
     formatted = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     json.loads(formatted)  # Validate before touching disk.
@@ -140,9 +144,9 @@ def atomic_save(path: Path, data: dict[str, Any], original: bytes | None) -> Pat
     path.parent.mkdir(parents=True, exist_ok=True)
     backup = None
     if original is not None:
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        backup = path.with_name(f"{path.name}.bak-{stamp}")
-        shutil.copy2(path, backup)
+        backup = save_config_backup(
+            path, original, backup_dir or PROJECT_DIR / "config_backups"
+        )
 
     file_mode = stat.S_IMODE(path.stat().st_mode) if original is not None else 0o600
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -260,15 +264,17 @@ class UserEditor:
     def __init__(
         self, users_path: Path, servers: list[tuple[str, str]],
         default_id: str, owner_ids: set[int] | None = None,
+        backup_dir: Path | None = None,
     ) -> None:
         self.path = users_path
+        self.backup_dir = backup_dir or PROJECT_DIR / "config_backups"
         self.servers = servers
         self.default_id = default_id
         self.owner_ids = owner_ids or set()
         self.config, self.original = load_users(users_path)
 
     def save(self) -> None:
-        backup = atomic_save(self.path, self.config, self.original)
+        backup = atomic_save(self.path, self.config, self.original, self.backup_dir)
         self.original = self.path.read_bytes()
         print(f"✅ Сохранено: {self.path}")
         if backup is not None:

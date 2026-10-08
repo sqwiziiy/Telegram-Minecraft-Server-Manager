@@ -11,17 +11,16 @@ import os
 import re
 import secrets
 import shlex
-import shutil
 import socket
 import stat
 import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 from scripts.manage_users import ConfigurationError, configured_path, read_simple_env  # noqa: E402
+from scripts.config_backups import save_config_backup  # noqa: E402
 
 SERVER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 VALID_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -196,7 +195,12 @@ def safe_write(path: Path, payload: bytes, mode: int) -> None:
             os.unlink(tmp)
 
 
-def apply_files(files: list[tuple[Path, bytes | None, bytes, bool]]) -> list[Path]:
+def apply_files(
+    files: list[tuple[Path, bytes | None, bytes, bool]],
+    backup_dir: Path | None = None,
+    *,
+    server_id: str | None = None,
+) -> list[Path]:
     """Check originals, create backups and atomically replace staged files.
 
     servers.json is provided last; failure rolls back earlier changes.
@@ -208,16 +212,13 @@ def apply_files(files: list[tuple[Path, bytes | None, bytes, bool]]) -> list[Pat
             raise ConfigurationError(f"{path} изменился во время настройки; запись отменена")
 
     backups: list[Path] = []
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup_dir = backup_dir or PROJECT_DIR / "config_backups"
     for path, old, _, secret in changed:
         if old is None:
             continue
-        backup = path.with_name(f"{path.name}.bak-{stamp}")
         try:
-            shutil.copy2(path, backup)
-            if secret:
-                backup.chmod(0o600)
-        except OSError as exc:
+            backup = save_config_backup(path, old, backup_dir, server_id=server_id)
+        except (OSError, ValueError) as exc:
             raise ConfigurationError(f"Не удалось сохранить резервную копию {path}: {exc}") from exc
         backups.append(backup)
 
@@ -399,7 +400,7 @@ def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
         (props_path, props_original, props_new, False),
         (env_path, current_env, env_new, True),
         (servers_path, config_original, config_new, False),
-    ])
+    ], backup_dir=project_dir / "config_backups", server_id=sid)
     print(f"\n✅ Сервер «{name}» подключён.")
     for backup in backups:
         print(f"   Резервная копия: {backup}")

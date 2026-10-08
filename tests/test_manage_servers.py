@@ -73,12 +73,14 @@ class ManageServersTests(unittest.TestCase):
             path = Path(tmp) / "servers.json"
             original = b'{"servers":[]}\n'
             path.write_bytes(original)
-            backups = apply_files([(path, original, b'{"servers":[1]}\n', False)])
+            backups = apply_files([(path, original, b'{"servers":[1]}\n', False)], backup_dir=Path(tmp) / "config_backups")
             self.assertEqual(path.read_bytes(), b'{"servers":[1]}\n')
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_bytes(), original)
+            self.assertEqual(backups[0].parent, Path(tmp) / "config_backups")
+            self.assertEqual(backups[0].stat().st_mode & 0o777, 0o600)
             with self.assertRaisesRegex(ConfigurationError, "изменился"):
-                apply_files([(path, original, b"{}", False)])
+                apply_files([(path, original, b"{}", False)], backup_dir=Path(tmp) / "config_backups")
 
     def test_wizard_adds_new_server_without_changing_existing_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -139,9 +141,14 @@ class ManageServersTests(unittest.TestCase):
             self.assertIn(f'{env_key}="strong-test-password"', env)
             self.assertIn('BOT_TOKEN="do-not-touch"', env)
             self.assertEqual((bot / ".env").stat().st_mode & 0o777, 0o600)
-            self.assertEqual(len(list(bot.glob("servers.json.bak-*"))), 1)
-            self.assertEqual(len(list(bot.glob(".env.bak-*"))), 1)
-            self.assertEqual(len(list(test.glob("server.properties.bak-*"))), 1)
+            snapshot_dir = bot / "config_backups"
+            self.assertEqual(len(list(snapshot_dir.glob("servers.json.bak-*"))), 1)
+            self.assertEqual(len(list(snapshot_dir.glob(".env.bak-*"))), 1)
+            self.assertEqual(len(list(snapshot_dir.glob("test-server-server.properties.bak-*"))), 1)
+            self.assertEqual(snapshot_dir.stat().st_mode & 0o777, 0o700)
+            self.assertTrue(all(file.stat().st_mode & 0o777 == 0o600 for file in snapshot_dir.iterdir()))
+            self.assertFalse(list(bot.glob("*.bak-*")))
+            self.assertFalse(list(test.glob("*.bak-*")))
 
     def test_cancel_before_save_changes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
