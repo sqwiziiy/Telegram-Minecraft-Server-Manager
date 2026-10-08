@@ -100,9 +100,9 @@ Use `server_software` in each `servers.json` entry (separate from `type`, which 
 
 Both local and SSH wizards check for `mods/` and `plugins/` and suggest the type while allowing manual override; absence of both directories does **not** prove the server is Vanilla. To edit a previously registered server, run `python3 scripts/manage_servers.py` and select **3: Change existing server type**, then select the server and software profile. Existing policies, SSH credentials, launcher, ports and worlds remain unchanged. Configuration snapshots are saved to `config_backups/`.
 
-### Remote Linux Minecraft servers over SSH (experimental branch)
+### Remote Linux Minecraft servers over SSH (v2.0.0)
 
-**Available for review in `feat/remote-ssh-servers`, not yet merged into main.** The `scripts/manage_servers.py` wizard now offers either local setup or remote Linux connection over SSH. Use SSH key authentication and a strictly verified host key from the bot service account's `known_hosts`. The remote machine needs OpenSSH, Python 3.10+, and a working Minecraft installation; it does **not** need a separate bot, permanent API daemon, or Python dependencies.
+**Available in v2.0.0 and later.** The `scripts/manage_servers.py` wizard offers either local setup or remote Linux connection over SSH. Use SSH key authentication and a strictly verified host key from the bot service account's `known_hosts`. The remote machine needs OpenSSH, Python 3.10+, and a working Minecraft installation; it does **not** need a separate bot, permanent API daemon, or Python dependencies.
 
 The wizard asks for SSH host/user/port, private key, known_hosts, absolute remote Minecraft folder, ID/name, launcher and game/RCON ports. It verifies SSH and available ports, saves the remote `server.properties` with backup, and updates the bot's local `servers.json` / private `.env`. Remote RCON is executed on localhost on the remote host through SSH, without exposing its port publicly.
 
