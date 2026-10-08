@@ -49,7 +49,20 @@ def operation_lock(config):
         lock_path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600
     )
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        # A long world backup can hold the lock for minutes. Fail clearly
+        # rather than letting Telegram time out or killing an active backup.
+        deadline = time.monotonic() + 8
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        "Another operation is running on this Minecraft server "
+                        "(possibly a backup). Retry after it finishes."
+                    )
+                time.sleep(0.1)
         yield
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
@@ -66,12 +79,22 @@ def process_alive(pid, started):
         return False
 
 
+def boot_id():
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return ""
+
+
 def pid_record(config):
     name = path(config["pid_file"])
     try:
         record = json.loads(name.read_text())
         pid = int(record["pid"])
         started = int(record["start_ticks"])
+        recorded_boot = record.get("boot_id")
+        if recorded_boot and recorded_boot != boot_id():
+            return None
         if process_alive(pid, started):
             return pid, started
     except (OSError, KeyError, ValueError, TypeError):
@@ -150,7 +173,9 @@ def launch(config):
     try:
         with temporary.open("x", encoding="utf-8") as stream:
             os.chmod(temporary, 0o600)
-            json.dump({"pid": child.pid, "start_ticks": start_ticks}, stream)
+            json.dump({
+                "pid": child.pid, "start_ticks": start_ticks, "boot_id": boot_id(),
+            }, stream)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, record_path)
@@ -302,9 +327,14 @@ def tail_file(config, lines, key):
 
 
 def make_backup(config, automatic):
-    if automatic and get_status(config)["running"]:
+    status = get_status(config)
+    if automatic and status["running"]:
         raise RuntimeError("Automatic backup requires an offline server")
-    if not automatic and get_status(config)["running"]:
+    if not automatic and status["running"]:
+        if status["pid"] is None:
+            raise RuntimeError(
+                "Cannot safely back up a running unmanaged process: managed PID missing"
+            )
         answer = rcon(config, "save-off")
         if answer.startswith("❌"):
             raise RuntimeError("Server active, cannot pause saves via RCON")
@@ -504,6 +534,9 @@ def dispatch(request):
                 return launch(config)
             return make_backup(config, bool(request.get("automatic", False)))
     if action == "rcon":
+        status = get_status(config)
+        if status["running"] and status["pid"] is None:
+            raise RuntimeError("Cannot send RCON to an unrecognized remote process")
         return rcon(config, request["command"])
     if action == "tail_output":
         return tail_file(config, request.get("lines", 30), "output_log")
