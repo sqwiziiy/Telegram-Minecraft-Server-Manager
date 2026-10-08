@@ -296,6 +296,17 @@ def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
     print(f"Конфигурация: {servers_path}")
     print("Уже подключены: " + (", ".join(s.get("id", "?") for s in servers) or "нет"))
     print("Подключение существующей установки Minecraft, без скачивания файлов.")
+    print("\n  1. 💻 Локальный сервер (папка на этом ПК)")
+    print("  2. 🌐 Удалённый Linux-сервер (SSH)")
+    while True:
+        mode = ask_text("Режим", "1")
+        if mode in {"1", "2"}:
+            break
+        print("Выбери 1 или 2.")
+    if mode == "2":
+        from scripts.manage_remote_servers import run_remote_wizard
+
+        return run_remote_wizard(project_dir, servers_path, config_original, document, servers)
 
     raw_dir = ask_text("\nПолный путь к папке Minecraft-сервера (0 — выход)")
     if raw_dir == "0":
