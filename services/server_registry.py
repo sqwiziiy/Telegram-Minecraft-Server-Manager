@@ -266,6 +266,7 @@ class ServerRegistry:
                         "output_log": output_log,
                         "stop_timeout": stop_timeout,
                         "rcon_port": rcon_port,
+                        "minecraft_port": int(raw.get("minecraft_port", 25565)),
                         "rcon_password": rcon_password,
                         "minecraft_log_path": self._path_value(raw, "minecraft_log_path", server_dir / "logs" / "latest.log"),
                         "mods_dir": self._path_value(raw, "mods_dir", server_dir / "mods"),
