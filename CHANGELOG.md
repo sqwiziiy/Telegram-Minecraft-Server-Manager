@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased] - v2.0.1
+
+### Added
+
+- Interactive menu option 4 in `scripts/manage_servers.py` to unregister local or SSH Minecraft servers without manually editing configuration files.
+- Confirmation by entering the exact server ID, with preview and an explicit guarantee that Minecraft processes, files, worlds, mods, plugins, logs and ZIP archives are left untouched.
+- Cleanup of unshared RCON environment variables, per-server user permissions, and persisted auto-stop and auto-backup settings; other servers remain unchanged.
+- Safe reassignment of `DEFAULT_SERVER_ID` when necessary without transferring legacy user privileges. The last server cannot be removed.
+- Private timestamped config backups for all changed files, including custom JSON config/state paths, with rollback on write failure.
+
+### Upgrade
+
+- Stop the Telegram bot service before modifying persistent auto-task states. On local hosts use `KillMode=process` to keep Java running across bot service restarts.
+- Run `python3 scripts/manage_servers.py`, choose option 4 and type the server ID to confirm. Then start the bot service again.
+
 ## [v2.0.0] - 2026-10-08
 
 **Multi-Server & Remote Management Update.** Consolidates the previously unreleased multi-server, user-permission, event-history, automation, control-API and SSH-management features.
