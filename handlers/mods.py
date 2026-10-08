@@ -40,6 +40,12 @@ def _files(mods_dir: str) -> list[str] | None:
         return None
 
 
+async def _files_for(server) -> list[str] | None:
+    if server.ssh_remote is not None:
+        return await server.ssh_remote.request("list_mods")
+    return _files(server.mods_dir)
+
+
 def _text(files: list[str], user_id: int, server_id: str) -> str:
     text = "🧩 <b>Моды</b>\n\n" + ("\n".join(f"{i + 1}. <code>{html.escape(f)}</code>" for i, f in enumerate(files)) if files else "Папка модов пуста.")
     if access_control.can_server(user_id, server_id, "mods.upload"):
@@ -60,7 +66,11 @@ async def list_mods(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await state.update_data(server_id=server_id)
     await state.set_state(ModsStates.awaiting_upload)
-    files = _files(server.mods_dir)
+    try:
+        files = await _files_for(server)
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"SSH: {str(exc)[:120]}", show_alert=True)
+        return
     if files is None:
         await callback.message.edit_text(
             f"❌ Папка модов не найдена:\n<code>{html.escape(server.mods_dir)}</code>",
@@ -96,7 +106,11 @@ async def ask_delete(callback: CallbackQuery) -> None:
     if not access_control.can_server(callback.from_user.id, sid, "mods.delete"):
         await deny_access(callback)
         return
-    files = _files(server.mods_dir)
+    try:
+        files = await _files_for(server)
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"SSH: {str(exc)[:120]}", show_alert=True)
+        return
     if files is None or idx >= len(files):
         await callback.answer("Список модов изменился.", show_alert=True)
         return
@@ -118,26 +132,37 @@ async def confirm_delete(callback: CallbackQuery) -> None:
     if not access_control.can_server(callback.from_user.id, sid, "mods.delete"):
         await deny_access(callback)
         return
-    files = _files(server.mods_dir)
+    try:
+        files = await _files_for(server)
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"SSH: {str(exc)[:120]}", show_alert=True)
+        return
     if files is None or idx >= len(files) or not _safe(files[idx]):
         await callback.answer("Некорректный файл.", show_alert=True)
         return
-    root = os.path.realpath(server.mods_dir)
-    target = os.path.realpath(os.path.join(server.mods_dir, files[idx]))
-    try:
-        inside_mods = os.path.commonpath([root, target]) == root
-    except ValueError:
-        inside_mods = False
-    if not inside_mods:
-        await callback.answer("Недопустимый путь.", show_alert=True)
-        return
-    try:
-        os.remove(target)
-    except FileNotFoundError:
-        await callback.answer("Файл уже удалён.", show_alert=True)
-        return
+    if server.ssh_remote is not None:
+        try:
+            await server.ssh_remote.request("delete_mod", filename=files[idx])
+        except Exception as exc:  # noqa: BLE001
+            await callback.answer(f"SSH: {str(exc)[:120]}", show_alert=True)
+            return
+    else:
+        root = os.path.realpath(server.mods_dir)
+        target = os.path.realpath(os.path.join(server.mods_dir, files[idx]))
+        try:
+            inside_mods = os.path.commonpath([root, target]) == root
+        except ValueError:
+            inside_mods = False
+        if not inside_mods:
+            await callback.answer("Недопустимый путь.", show_alert=True)
+            return
+        try:
+            os.remove(target)
+        except FileNotFoundError:
+            await callback.answer("Файл уже удалён.", show_alert=True)
+            return
     await callback.answer("Удалено")
-    files = _files(server.mods_dir) or []
+    files = await _files_for(server) or []
     await callback.message.edit_text(_text(files, callback.from_user.id, sid), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, sid))
 
 
@@ -160,6 +185,28 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
         return
     if doc.file_size and doc.file_size > MAX_MOD_UPLOAD_MB * 1024 * 1024:
         await message.answer(f"❌ Файл больше лимита {MAX_MOD_UPLOAD_MB} MB.")
+        return
+    if server.ssh_remote is not None:
+        status = await message.answer("⏳ Загружаю мод на удалённый сервер…")
+        fd, temp_path = tempfile.mkstemp(prefix=".remote-mod-", suffix=".jar")
+        os.close(fd)
+        try:
+            await message.bot.download(doc, destination=temp_path)
+            await server.ssh_remote.upload_mod(safe_name, temp_path)
+            files = await _files_for(server) or []
+            await status.edit_text(
+                f"✅ <code>{html.escape(safe_name)}</code> загружен на удалённый сервер.\n\n"
+                f"{_text(files, message.from_user.id, sid)}",
+                parse_mode="HTML",
+                reply_markup=mods_list_keyboard(len(files), message.from_user.id, sid),
+            )
+        except Exception as exc:  # noqa: BLE001
+            await status.edit_text(
+                f"❌ Ошибка удалённой загрузки: <code>{html.escape(str(exc))}</code>",
+                parse_mode="HTML",
+            )
+        finally:
+            os.remove(temp_path)
         return
     os.makedirs(server.mods_dir, exist_ok=True)
     target = os.path.join(server.mods_dir, safe_name)
