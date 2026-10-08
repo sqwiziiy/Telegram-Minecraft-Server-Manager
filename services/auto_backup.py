@@ -43,6 +43,7 @@ class AutoBackupManager:
         self._server_locks: dict[str, asyncio.Lock] = {}
         self._retry_not_before: dict[str, float] = {}
         self._task: asyncio.Task | None = None
+        self._stop_requested = asyncio.Event()
 
     def _load_state(self) -> dict[str, BackupSchedule]:
         try:
@@ -183,7 +184,7 @@ class AutoBackupManager:
             logger.info("Auto-backup completed for %s", sid)
 
     async def _run(self, servers: list[ManagedServer]) -> None:
-        while True:
+        while not self._stop_requested.is_set():
             for server in servers:
                 try:
                     await self.check_server(server)
@@ -191,19 +192,25 @@ class AutoBackupManager:
                     raise
                 except Exception:
                     logger.exception("Auto-backup check failed for %s", server.server_id)
-            await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+            try:
+                await asyncio.wait_for(self._stop_requested.wait(), timeout=CHECK_INTERVAL_SECONDS)
+            except asyncio.TimeoutError:
+                pass
 
     def start(self, servers: Iterable[ManagedServer]) -> None:
         if self._task is not None and not self._task.done():
             return
+        self._stop_requested.clear()
         self._task = asyncio.create_task(
             self._run(list(servers)), name="auto_backup_scheduler"
         )
 
     async def shutdown(self) -> None:
         if self._task is not None:
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+            # Do not cancel an active archive: its worker thread would keep writing
+            # after the async task releases the server start/stop lock.
+            self._stop_requested.set()
+            await self._task
             self._task = None
 
 
