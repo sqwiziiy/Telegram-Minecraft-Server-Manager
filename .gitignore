@@ -1,6 +1,7 @@
 __pycache__/
 .env
 users.json
+users.json.bak-*
 handlers/__pycache__/
 nohup.out
 
