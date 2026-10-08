@@ -7,6 +7,9 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
+from typing import Awaitable, Callable, TypeVar
+
+_T = TypeVar("_T")
 from pathlib import Path
 
 import psutil
@@ -171,6 +174,19 @@ class ServerProcessManager:
             )
         except psutil.Error:
             return ServerStatus(running=False)
+
+    async def run_if_stopped(
+        self, action: Callable[[], Awaitable[_T]]
+    ) -> tuple[bool, _T | None]:
+        """Run a long offline operation without allowing a concurrent start.
+
+        The same lock protects start/stop. Checking process existence while
+        holding it prevents the manager from starting Minecraft mid-backup.
+        """
+        async with self._lock:
+            if await asyncio.to_thread(self._get_managed_process):
+                return False, None
+            return True, await action()
 
     async def start(self) -> str:
         async with self._lock:

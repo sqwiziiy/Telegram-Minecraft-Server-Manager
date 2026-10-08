@@ -35,7 +35,7 @@ No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR 
 | 💾 Backups | Create RCON-coordinated ZIP backups with saves paused and flushed |
 | 📜 Logs | Show launch output in the same Telegram panel with refresh/back navigation |
 | 📋 Event history | Separate Telegram tab with persistent daily join/leave/chat/death and server lifecycle logs |
-| ⏱ Auto-stop | Stop an empty server after a configurable timeout, driven locally by join/leave events |
+| ⚙️ Auto-tasks | Event-driven auto-stop plus automatic offline backups (6h, 12h, 24h, 3d, 7d) |
 | 🔌 Control API | Optional bearer-authenticated HTTP/OpenAPI interface for bots, AI agents and scripts |
 | 🔐 Access control | `OWNER_IDS` plus per-user roles and permissions from `users.json` |
 
@@ -88,6 +88,22 @@ OWNER_IDS=123456789
 MINECRAFT_SERVERS_FILE=./servers.json
 DEFAULT_SERVER_ID=storm-survival
 STORM_SURVIVAL_RCON_PASSWORD=replace_me
+```
+
+### Add Minecraft servers interactively
+
+Use `python3 scripts/manage_servers.py` to register a **pre-installed** Minecraft server without hand-editing `servers.json`. Enter its installation directory, ID, display name, launcher command and game/RCON ports. The CLI checks for port conflicts, offers free defaults, reads or generates the RCON password without displaying it, and previews changes before confirmation.
+
+It updates `servers.json`, the new server's `server.properties` and the bot's private `.env` with backups and atomic replacements (attempting rollback on failure). Existing server entries and unrelated Minecraft properties are preserved; new servers start with auto-stop and backup deletion disabled. Dependencies, EULA acceptance, port forwarding and any server installation are **not** managed by this script. After saving, restart the bot and grant friends access separately via `python3 scripts/manage_users.py`.
+
+### Manage user access interactively
+
+Run `python3 scripts/manage_users.py` from anywhere. This standalone CLI uses only Python's standard library and reads the repository `.env` to locate `servers.json` and `users.json`. Select a Telegram user (or add a new Telegram ID), select a Minecraft server, then choose a preset: viewer, view+start, operator, admin, or toggle individual permissions. You can revoke access to one server, rename a user, or delete a user with confirmation.
+
+Changes preserve permissions on other servers, validate JSON, create timestamped `users.json.bak-*` copies, and refuse to overwrite externally edited or malformed access files. New Minecraft servers grant no access automatically. Restart the bot to reload the file:
+
+```bash
+sudo systemctl restart telegram-minecraft-manager.service
 ```
 
 ### Granular access for other users
@@ -163,7 +179,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**. Auto-stop is configured from the same server screen through **⏱ Auto-stop** and works without the external API or any AI client. **📋 События** opens a separate persistent activity/history view; daily files are stored under `logs/events/YYYY-MM-DD.log` inside each server directory.
+The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**. Auto-stop is configured under **⚙️ Автозадачи → ⏱ Автостоп**. Automatic backups are configured separately under **⚙️ Автозадачи → 💾 Автобэкап**, with intervals of 6/12/24 hours or 3/7 days. The original **💾 Бэкап** button still creates manual backups even while the server runs. When an automatic backup is due, it waits for Minecraft to be fully stopped (checks every 15 seconds), then creates one ZIP archive; multiple missed intervals collapse into one backup. Failed archives are retried no more often than every five minutes. Schedules and pending backups survive bot restarts. **📋 События** opens a separate persistent activity/history view; daily files are stored under `logs/events/YYYY-MM-DD.log` inside each server directory.
 
 ## Running the bot with systemd
 
@@ -213,10 +229,26 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 | `MAX_MOD_UPLOAD_MB` | Maximum Telegram mod upload size |
 | `HOST_DISK_PATH` | Filesystem path shown in the `🖥 Host` disk-usage row; defaults to `/home` |
 | `AUTO_STOP_STATE_FILE` | Persistent auto-stop override state |
+| `AUTO_BACKUP_STATE_FILE` | Persistent scheduled backup state, default `auto_backup_state.json` |
+| `BACKUP_RETENTION_MAX_COUNT` | Maximum number of scheduled backup archives per server, `0` disables (default) |
+| `BACKUP_RETENTION_MAX_GB` | Maximum total scheduled backup archive size in GiB (1024³ bytes), `0` disables (default) |
 | `AUTO_STOP_DEFAULT_SECONDS` | Default empty-server timeout; `0` disables it |
 | `CONTROL_API_ENABLED` | Enable the optional external HTTP Control API |
 | `CONTROL_API_HOST`, `CONTROL_API_PORT` | Control API bind address and port |
 | `CONTROL_API_TOKEN` | Bearer token for external API clients |
+
+## Scheduled backup retention
+
+Automatic deletion is **disabled by default**. Configure optional limits in `.env`:
+
+```env
+BACKUP_RETENTION_MAX_COUNT=5
+BACKUP_RETENTION_MAX_GB=10
+```
+
+These values apply to each server backup directory. Override either value on a single server inside `servers.json` with `"backup_retention_max_count": 5` and/or `"backup_retention_max_gb": 10`. Explicit per-server values override the environment defaults; `0` disables an individual limit.
+
+After a **successful scheduled backup**, the manager removes the oldest matching automatic archives until **both enabled limits** are met. It only removes new `world_auto_backup_*.zip` archives with the exact timestamp format. Manually requested `world_backup_*.zip`, arbitrary files, symlinks, and indistinguishable older-version backups are never deleted. At least the newest scheduled archive is always preserved, even if that single ZIP exceeds the configured size cap; an over-limit warning is then logged. No cleanup runs at bot startup. Restart the bot to reload config edits.
 
 ## Security notes
 
@@ -224,7 +256,9 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 - Minecraft commands go through RCON; the bot does not expose a Linux shell.
 - Server startup uses an argv list and never `shell=True`.
 - RCON packet sizes are bounded before allocation.
-- Live backups pause saves, flush the world, archive it, then re-enable saves.
+- Manual live backups pause saves, flush the world, archive it, then re-enable saves.
+- Scheduled backups run only with Minecraft stopped, blocking a start request through Telegram/API until the archive finishes. Manual and automatic backups of the same server cannot run concurrently.
+- The new `backup.schedule` permission is granted to owner/admin by default, not to the operator role.
 - Telegram/RCON/log/file-name content is HTML-escaped before being rendered.
 - Mod uploads reject traversal names, enforce a size limit and refuse overwriting existing paths.
 - Secrets belong in `.env`; `.env` is ignored by Git and CI checks for common accidental secret patterns.
@@ -247,6 +281,7 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 │   └── auth.py
 ├── services/
 │   ├── auto_stop.py
+│   ├── auto_backup.py
 │   ├── backup.py
 │   ├── control_api.py
 │   ├── event_history.py

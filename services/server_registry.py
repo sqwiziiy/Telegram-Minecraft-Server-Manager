@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -7,6 +8,8 @@ from pathlib import Path
 
 from config import (
     AUTO_STOP_DEFAULT_SECONDS,
+    BACKUP_RETENTION_MAX_COUNT,
+    BACKUP_RETENTION_MAX_GB,
     DEFAULT_SERVER_ID,
     BACKUP_DIR,
     MINECRAFT_SERVERS_FILE,
@@ -44,6 +47,8 @@ class ManagedServer:
     world_dir: str
     backup_dir: str
     auto_stop_seconds: int = 0
+    backup_retention_max_count: int = 0
+    backup_retention_max_gb: float = 0.0
 
     @property
     def rcon_configured(self) -> bool:
@@ -131,7 +136,29 @@ class ServerRegistry:
             world_dir=WORLD_DIR,
             backup_dir=BACKUP_DIR,
             auto_stop_seconds=AUTO_STOP_DEFAULT_SECONDS,
+            backup_retention_max_count=BACKUP_RETENTION_MAX_COUNT,
+            backup_retention_max_gb=BACKUP_RETENTION_MAX_GB,
         )
+
+    @staticmethod
+    def _retention_limits(raw: dict, server_id: str) -> tuple[int, float]:
+        count = raw.get("backup_retention_max_count", BACKUP_RETENTION_MAX_COUNT)
+        gb = raw.get("backup_retention_max_gb", BACKUP_RETENTION_MAX_GB)
+
+        if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 1_000_000:
+            raise RuntimeError(
+                f"Server {server_id!r} has invalid backup_retention_max_count; expected non-negative integer"
+            )
+        if isinstance(gb, bool) or not isinstance(gb, (int, float)):
+            raise RuntimeError(
+                f"Server {server_id!r} has invalid backup_retention_max_gb; expected non-negative number"
+            )
+        gb = float(gb)
+        if not math.isfinite(gb) or not 0 <= gb <= 1_000_000:
+            raise RuntimeError(
+                f"Server {server_id!r} has invalid backup_retention_max_gb; expected non-negative finite number"
+            )
+        return count, gb
 
     def _load_json_servers(self, path: Path) -> bool:
         try:
@@ -197,6 +224,8 @@ class ServerRegistry:
                     "expected 0..86400"
                 )
 
+            backup_retention_max_count, backup_retention_max_gb = self._retention_limits(raw, server_id)
+
             manager = ServerProcessManager(
                 server_dir=str(server_dir),
                 start_command=start_command,
@@ -221,6 +250,8 @@ class ServerRegistry:
                     world_dir=self._path_value(raw, "world_dir", server_dir / "world"),
                     backup_dir=self._path_value(raw, "backup_dir", server_dir / "backups"),
                     auto_stop_seconds=auto_stop_seconds,
+                    backup_retention_max_count=backup_retention_max_count,
+                    backup_retention_max_gb=backup_retention_max_gb,
                 )
             )
         return True

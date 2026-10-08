@@ -19,8 +19,8 @@ def server_home_keyboard(server: ManagedServer, user_id: int) -> InlineKeyboardM
         rows.append([InlineKeyboardButton(text="📊 Статус", callback_data=f"status:{sid}")])
     if any(access_control.can_server(user_id, sid, p) for p in ("server.start", "server.stop", "server.restart")):
         rows.append([InlineKeyboardButton(text="⚙️ Управление", callback_data=f"manage:{sid}")])
-    if access_control.can_server(user_id, sid, "server.autostop"):
-        rows.append([InlineKeyboardButton(text="⏱ Auto-stop", callback_data=f"autostop:{sid}")])
+    if any(access_control.can_server(user_id, sid, p) for p in ("server.autostop", "backup.schedule")):
+        rows.append([InlineKeyboardButton(text="⚙️ Автозадачи", callback_data=f"tasks:{sid}")])
     if access_control.can_server(user_id, sid, "events.view"):
         rows.append([InlineKeyboardButton(text="📋 События", callback_data=f"events:{sid}")])
     utility = []
@@ -75,6 +75,37 @@ def mod_delete_confirm_keyboard(server_id: str, idx: int) -> InlineKeyboardMarku
     ]])
 
 
+def auto_tasks_keyboard(server_id: str, user_id: int) -> InlineKeyboardMarkup:
+    rows = []
+    if access_control.can_server(user_id, server_id, "server.autostop"):
+        rows.append([InlineKeyboardButton(text="⏱ Автостоп", callback_data=f"autostop:{server_id}")])
+    if access_control.can_server(user_id, server_id, "backup.schedule"):
+        rows.append([InlineKeyboardButton(text="💾 Автобэкап", callback_data=f"autobackup:{server_id}")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def auto_backup_keyboard(server_id: str, current_seconds: int) -> InlineKeyboardMarkup:
+    options = (
+        ("🚫 Выкл", 0),
+        ("6 часов", 21600),
+        ("12 часов", 43200),
+        ("24 часа", 86400),
+        ("3 дня", 259200),
+        ("7 дней", 604800),
+    )
+    buttons = [
+        InlineKeyboardButton(
+            text=("✅ " if seconds == current_seconds else "") + label,
+            callback_data=f"autobackup_set:{seconds}:{server_id}",
+        )
+        for label, seconds in options
+    ]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="◀️ Автозадачи", callback_data=f"tasks:{server_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def auto_stop_keyboard(server_id: str, current_seconds: int) -> InlineKeyboardMarkup:
     options = (
         ("🚫 Выкл", 0),
@@ -91,7 +122,7 @@ def auto_stop_keyboard(server_id: str, current_seconds: int) -> InlineKeyboardMa
         for label, seconds in options
     ]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
+    rows.append([InlineKeyboardButton(text="◀️ Автозадачи", callback_data=f"tasks:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

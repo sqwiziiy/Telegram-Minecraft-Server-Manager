@@ -34,6 +34,49 @@ class ServerRegistryTests(unittest.TestCase):
             self.assertEqual(registry.get("create").mods_dir, str((root / "create" / "mods").resolve()))
             self.assertEqual(registry.get("vanilla").world_dir, str((root / "vanilla" / "world").resolve()))
 
+    def test_backup_retention_defaults_and_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "servers.json"
+            path.write_text(json.dumps({"servers": [
+                {"id": "storm", "name": "Storm", "server_dir": str(root / "storm"),
+                 "backup_retention_max_count": 4, "backup_retention_max_gb": 2.5},
+                {"id": "vanilla", "name": "Vanilla", "server_dir": str(root / "vanilla")},
+            ]}), encoding="utf-8")
+            with (
+                patch.object(registry_module, "MINECRAFT_SERVERS_FILE", str(path)),
+                patch.object(registry_module, "DEFAULT_SERVER_ID", "storm"),
+                patch.object(registry_module, "BACKUP_RETENTION_MAX_COUNT", 0),
+                patch.object(registry_module, "BACKUP_RETENTION_MAX_GB", 0.0),
+            ):
+                registry = registry_module.ServerRegistry()
+            self.assertEqual(registry.get("storm").backup_retention_max_count, 4)
+            self.assertEqual(registry.get("storm").backup_retention_max_gb, 2.5)
+            self.assertEqual(registry.get("vanilla").backup_retention_max_count, 0)
+            self.assertEqual(registry.get("vanilla").backup_retention_max_gb, 0.0)
+
+    def test_invalid_backup_retention_limits_fail_fast(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "servers.json"
+            for overrides in (
+                {"backup_retention_max_count": -1},
+                {"backup_retention_max_count": 1.5},
+                {"backup_retention_max_count": True},
+                {"backup_retention_max_gb": -0.1},
+                {"backup_retention_max_gb": "NaN"},
+                {"backup_retention_max_gb": float("inf")},
+                {"backup_retention_max_gb": True},
+            ):
+                path.write_text(json.dumps({"servers": [
+                    {"id": "storm", "name": "Storm", "server_dir": tmp, **overrides},
+                ]}), encoding="utf-8")
+                with (
+                    patch.object(registry_module, "MINECRAFT_SERVERS_FILE", str(path)),
+                    patch.object(registry_module, "DEFAULT_SERVER_ID", "storm"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "backup_retention_"):
+                        registry_module.ServerRegistry()
+
     def test_duplicate_ids_and_invalid_ports_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -10,6 +10,7 @@ from config import ADMIN_IDS, BOT_TOKEN, CONTROL_API_ENABLED
 from handlers import console, mods, start, status, system
 from middlewares.auth import AuthMiddleware
 from services.auto_stop import auto_stop_manager
+from services.auto_backup import auto_backup_manager
 from services.event_history import event_history
 from services.log_monitor import tail_log
 from services.server_registry import server_registry
@@ -68,6 +69,7 @@ async def _on_startup() -> None:
     auto_stop_manager.set_notifier(_record_auto_stop)
     servers = server_registry.list()
     await auto_stop_manager.bootstrap(servers)
+    auto_backup_manager.start(servers)
     for server in servers:
         try:
             process = await server.manager.status()
@@ -92,6 +94,7 @@ async def _on_startup() -> None:
 
 
 async def _on_shutdown() -> None:
+    await auto_backup_manager.shutdown()
     await auto_stop_manager.shutdown()
     for admin_id in ADMIN_IDS:
         try:

@@ -24,6 +24,7 @@ ALL_PERMISSIONS = frozenset({
     "mods.upload",
     "mods.delete",
     "backup.create",
+    "backup.schedule",
     "backup.view",
 })
 

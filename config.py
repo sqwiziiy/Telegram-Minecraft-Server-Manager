@@ -60,6 +60,12 @@ _auto_stop_state_path = Path(os.getenv("AUTO_STOP_STATE_FILE", "auto_stop_state.
 if not _auto_stop_state_path.is_absolute():
     _auto_stop_state_path = PROJECT_DIR / _auto_stop_state_path
 AUTO_STOP_STATE_FILE: str = str(_auto_stop_state_path.resolve())
+# Persisted automatic backup schedules (one per configured server).
+_auto_backup_state_path = Path(os.getenv("AUTO_BACKUP_STATE_FILE", "auto_backup_state.json")).expanduser()
+if not _auto_backup_state_path.is_absolute():
+    _auto_backup_state_path = PROJECT_DIR / _auto_backup_state_path
+AUTO_BACKUP_STATE_FILE: str = str(_auto_backup_state_path.resolve())
+
 AUTO_STOP_DEFAULT_SECONDS: int = int(os.getenv("AUTO_STOP_DEFAULT_SECONDS", "0"))
 if not 0 <= AUTO_STOP_DEFAULT_SECONDS <= 86400:
     raise RuntimeError("AUTO_STOP_DEFAULT_SECONDS must be between 0 and 86400")
@@ -101,6 +107,29 @@ MODS_DIR: str = os.getenv("MODS_DIR", str(Path(SERVER_DIR) / "mods"))
 WORLD_DIR: str = os.getenv("WORLD_DIR", str(Path(SERVER_DIR) / "world"))
 BACKUP_DIR: str = os.getenv("BACKUP_DIR", str(Path(SERVER_DIR) / "backups"))
 MAX_MOD_UPLOAD_MB: int = max(1, int(os.getenv("MAX_MOD_UPLOAD_MB", "100")))
+
+# Optional automatic backup retention. Zero means unlimited/disabled.
+# Limits are independent: when both are set, both must be satisfied.
+def _nonnegative_retention_value(name: str, *, integer: bool) -> float | int:
+    import math
+
+    raw = os.getenv(name, "0").strip()
+    try:
+        value = int(raw) if integer else float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a non-negative number") from exc
+    if not math.isfinite(value) or not 0 <= value <= 1_000_000:
+        raise RuntimeError(f"{name} must be between 0 and 1,000,000")
+    return value
+
+
+BACKUP_RETENTION_MAX_COUNT: int = int(
+    _nonnegative_retention_value("BACKUP_RETENTION_MAX_COUNT", integer=True)
+)
+# One GiB = 1024**3 bytes. Keep this name for familiar .env configuration.
+BACKUP_RETENTION_MAX_GB: float = float(
+    _nonnegative_retention_value("BACKUP_RETENTION_MAX_GB", integer=False)
+)
 
 # Host dashboard disk path. /home is often the useful data filesystem on
 # self-hosted Linux machines; override this when another mount should be shown.

@@ -2,6 +2,7 @@ import asyncio
 import html
 import logging
 from pathlib import Path
+from datetime import datetime
 
 import psutil
 from aiogram import Router
@@ -11,6 +12,8 @@ from config import HOST_DISK_PATH
 from handlers.start import _home_text, _server_picker
 from keyboards.inline import (
     auto_stop_keyboard,
+    auto_tasks_keyboard,
+    auto_backup_keyboard,
     back_to_server_keyboard,
     confirm_keyboard,
     events_keyboard,
@@ -20,6 +23,7 @@ from keyboards.inline import (
 from middlewares.auth import deny_access
 from services.access_control import access_control
 from services.auto_stop import auto_stop_manager
+from services.auto_backup import auto_backup_manager
 from services.backup import create_backup
 from services.event_history import event_history
 from services.telegram_context import resolve_server
@@ -135,6 +139,132 @@ def _auto_stop_text(server) -> str:
         f"{status_text}{countdown}\n\n"
         "Работает по событиям входа/выхода. Перед выключением сервер "
         "один раз перепроверяется через RCON."
+    )
+
+
+def _backup_interval_text(seconds: int) -> str:
+    return {
+        21600: "6 часов",
+        43200: "12 часов",
+        86400: "24 часа",
+        259200: "3 дня",
+        604800: "7 дней",
+    }.get(seconds, f"{seconds} сек")
+
+
+def _auto_backup_text(server) -> str:
+    state = auto_backup_manager.status(server)
+    if not state["enabled"]:
+        summary = "🚫 Выключен"
+    else:
+        due = datetime.fromtimestamp(state["next_due_at"]).astimezone().strftime("%d.%m.%Y %H:%M")
+        summary = (
+            f"✅ Каждые {_backup_interval_text(state['interval_seconds'])}\n"
+            f"📅 Следующий срок: <code>{due}</code> (время сервера)"
+        )
+        if state["pending"]:
+            summary += "\n⏳ Срок наступил. Ожидает полной остановки Minecraft."
+
+    return (
+        f"💾 <b>Автобэкап · {html.escape(server.server_name)}</b>\n\n"
+        f"{summary}\n\n"
+        "Копирование запускается только при выключенном сервере. "
+        "Если сервер запущен, задача ждёт его остановки. "
+        "Пропущенные интервалы объединяются в один бэкап; "
+        "следующий отсчёт начинается после успешного копирования."
+    )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("tasks:"))
+async def auto_tasks_menu(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    uid = callback.from_user.id
+    if not (
+        access_control.can_server(uid, server_id, "server.autostop")
+        or access_control.can_server(uid, server_id, "backup.schedule")
+    ):
+        await deny_access(callback)
+        return
+
+    stop = auto_stop_manager.status(server)
+    backup = auto_backup_manager.status(server)
+    stop_label = _duration_text(stop["timeout_seconds"]) if stop["enabled"] else "выкл"
+    backup_label = _backup_interval_text(backup["interval_seconds"]) if backup["enabled"] else "выкл"
+    await callback.message.edit_text(
+        f"⚙️ <b>Автозадачи · {html.escape(server.server_name)}</b>\n\n"
+        f"⏱ Автостоп: <b>{stop_label}</b>\n"
+        f"💾 Автобэкап: <b>{backup_label}</b>"
+        + (" · ⏳ ожидает остановки" if backup["pending"] else ""),
+        parse_mode="HTML",
+        reply_markup=auto_tasks_keyboard(server_id, uid),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("autobackup:"))
+async def auto_backup_menu(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "backup.schedule"):
+        await deny_access(callback)
+        return
+
+    state = auto_backup_manager.status(server)
+    await callback.message.edit_text(
+        _auto_backup_text(server),
+        parse_mode="HTML",
+        reply_markup=auto_backup_keyboard(server_id, state["interval_seconds"]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("autobackup_set:"))
+async def auto_backup_set(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":", 2)
+    if len(parts) != 3:
+        await callback.answer("❌ Некорректная настройка.", show_alert=True)
+        return
+    try:
+        seconds = int(parts[1])
+    except ValueError:
+        await callback.answer("❌ Некорректный интервал.", show_alert=True)
+        return
+    server_id = parts[2]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "backup.schedule"):
+        await deny_access(callback)
+        return
+    try:
+        state = await auto_backup_manager.set_interval(server, seconds)
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    await event_history.record(
+        server,
+        kind="auto_backup_setting",
+        text=(
+            f"Автобэкап: {_backup_interval_text(seconds) if seconds else 'выключен'}"
+            f" · Telegram · {_telegram_actor(callback.from_user)}"
+        ),
+    )
+    await callback.message.edit_text(
+        _auto_backup_text(server),
+        parse_mode="HTML",
+        reply_markup=auto_backup_keyboard(server_id, state["interval_seconds"]),
+    )
+    await callback.answer(
+        f"✅ Автобэкап: {_backup_interval_text(seconds) if seconds else 'выключен'}"
     )
 
 

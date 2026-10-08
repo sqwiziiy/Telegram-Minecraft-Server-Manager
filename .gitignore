@@ -1,8 +1,13 @@
 __pycache__/
 .env
 users.json
+users.json.bak-*
+servers.json.bak-*
+.env.bak-*
+server.properties.bak-*
 handlers/__pycache__/
 nohup.out
 
 servers.json
 auto_stop_state.json
+auto_backup_state.json
