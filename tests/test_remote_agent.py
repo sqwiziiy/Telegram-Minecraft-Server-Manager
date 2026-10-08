@@ -81,6 +81,32 @@ class RemoteAgentTests(unittest.TestCase):
         with zipfile.ZipFile(second["path"]) as archive:
             self.assertEqual(archive.read("world/level.dat"), b"level data")
 
+    def test_partially_written_remote_zip_is_never_published(self):
+        root = Path(self.config["backup_dir"])
+        root.mkdir()
+        leftover = root / ".world_auto_backup_20261008_000000_000001.zip.partial"
+        leftover.write_bytes(b"interrupted")
+        original_zip = remote_agent.zipfile.ZipFile
+
+        class BrokenArchive:
+            def __init__(self, *args, **kwargs):
+                self._writer = original_zip(*args, **kwargs)
+            def __enter__(self):
+                return self
+            def __exit__(self, exc_type, exc, tb):
+                return self._writer.__exit__(exc_type, exc, tb)
+            def write(self, *_args, **_kwargs):
+                raise OSError("disk full")
+
+        with patch.object(remote_agent.zipfile, "ZipFile", BrokenArchive):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                remote_agent.dispatch({
+                    "action": "backup", "config": self.config, "automatic": True,
+                })
+        self.assertFalse(leftover.exists())
+        self.assertEqual(list(root.glob("*.zip")), [])
+        self.assertEqual(list(root.glob("*.partial")), [])
+
     def test_auto_backup_blocks_when_remote_is_running(self):
         with patch.object(remote_agent, "get_status", return_value={"running": True}):
             with self.assertRaisesRegex(RuntimeError, "offline"):
