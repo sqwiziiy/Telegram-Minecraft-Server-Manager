@@ -135,7 +135,8 @@ class ManageServersTests(unittest.TestCase):
             self.assertEqual(props["rcon.password"], "strong-test-password")
             self.assertEqual(props["max-players"], "2")
             env = (bot / ".env").read_text(encoding="utf-8")
-            self.assertIn('TEST_SERVER_RCON_PASSWORD="strong-test-password"', env)
+            env_key = added["rcon_password_env"]
+            self.assertIn(f'{env_key}="strong-test-password"', env)
             self.assertIn('BOT_TOKEN="do-not-touch"', env)
             self.assertEqual((bot / ".env").stat().st_mode & 0o777, 0o600)
             self.assertEqual(len(list(bot.glob("servers.json.bak-*"))), 1)
