@@ -117,6 +117,9 @@ def validate_port(value: str | int, label: str) -> int:
 def existing_ports(servers: list[dict]) -> set[int]:
     taken = set()
     for server in servers:
+        # Ports on remote hosts do not conflict with local Minecraft instances.
+        if server.get("type", "local") == "ssh":
+            continue
         root = Path(str(server.get("server_dir", "/nonexistent"))).expanduser()
         props_path = root / "server.properties"
         try:
@@ -388,7 +391,7 @@ def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
     directory = Path(raw_dir).expanduser().resolve()
     if not directory.is_dir():
         raise ConfigurationError(f"Папка сервера не найдена: {directory}")
-    if any(Path(str(s.get("server_dir", ""))).expanduser().resolve() == directory for s in servers):
+    if any(s.get("type", "local") != "ssh" and Path(str(s.get("server_dir", ""))).expanduser().resolve() == directory for s in servers):
         raise ConfigurationError("Этот каталог уже подключён в servers.json")
 
     default_id = re.sub(r"[^a-z0-9_-]+", "-", directory.name.lower()).strip("-_")[:32]
