@@ -424,7 +424,13 @@ def dispatch(request):
         folder = path(config["server_dir"])
         if not folder.is_dir():
             raise FileNotFoundError(str(folder))
-        return {"properties": properties(config), "launchers": [name for name in ("start-server.sh", "start.sh", "run.sh") if (folder / name).is_file()], "python": sys.version.split()[0]}
+        return {
+            "properties": properties(config),
+            "launchers": [name for name in ("start-server.sh", "start.sh", "run.sh") if (folder / name).is_file()],
+            "python": sys.version.split()[0],
+            "has_mods": (folder / "mods").is_dir(),
+            "has_plugins": (folder / "plugins").is_dir(),
+        }
     if action == "port_available":
         port = int(request["port"])
         if not 1 <= port <= 65535:
