@@ -39,7 +39,7 @@ async def _prepare_live_backup(server: ManagedServer) -> tuple[bool, str | None]
 async def _create_backup_unlocked(server: ManagedServer | None = None, *, automatic: bool = False) -> str:
     """Create a consistent ZIP backup, coordinating with a live server through RCON."""
     server = server or server_registry.default()
-    if server.ssh_remote is not None:
+    if getattr(server, 'ssh_remote', None) is not None:
         # All filesystem and RCON operations occur ON the remote machine.
         # World ZIPs never stream through the bot unless explicitly requested.
         try:
