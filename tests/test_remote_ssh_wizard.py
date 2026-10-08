@@ -57,7 +57,7 @@ class SSHWizardTests(unittest.TestCase):
                 raise AssertionError(action)
             inputs = [
                 "2", "remote.example", "mc", "", str(key), str(known),
-                "/home/mc/test-server", "", "", "", "25566", "25576",
+                "/home/mc/test-server", "", "", "", "", "25566", "25576",
                 "да", "да",
             ]
             with (
@@ -73,6 +73,7 @@ class SSHWizardTests(unittest.TestCase):
             added = data["servers"][1]
             self.assertEqual(added["id"], "test-server")
             self.assertEqual(added["type"], "ssh")
+            self.assertEqual(added["server_software"], "vanilla")
             self.assertEqual(added["ssh"]["host"], "remote.example")
             self.assertEqual(added["ssh"]["user"], "mc")
             self.assertEqual(added["minecraft_port"], 25566)
@@ -109,7 +110,7 @@ class SSHWizardTests(unittest.TestCase):
                 raise AssertionError("Cancelled wizard must not make remote changes")
             choices = [
                 "2", "remote.example", "mc", "", str(key), str(known),
-                "/srv/minecraft", "", "", "", "", "", "", "нет",
+                "/srv/minecraft", "", "", "", "", "", "", "", "нет",
             ]
             with (
                 patch("services.remote_ssh.SSHRemote.request", fake_request),
