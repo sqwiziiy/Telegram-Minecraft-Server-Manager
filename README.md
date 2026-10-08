@@ -94,6 +94,16 @@ STORM_SURVIVAL_RCON_PASSWORD=replace_me
 
 The two CLI editors write timestamped snapshots to the bot project's **`config_backups/`** folder: `users.json`, `servers.json`, `.env` and server-specific `server.properties` backups. Snapshots are private (`0600`) inside a private directory (`0700`) and ignored by Git. Old `.bak-*` files are not automatically moved. Minecraft world ZIP backups are unrelated and remain in each server's configured backup directory.
 
+### Remote Linux Minecraft servers over SSH (experimental branch)
+
+**Available for review in `feat/remote-ssh-servers`, not yet merged into main.** The `scripts/manage_servers.py` wizard now offers either local setup or remote Linux connection over SSH. Use SSH key authentication and a strictly verified host key from the bot service account's `known_hosts`. The remote machine needs OpenSSH, Python 3.10+, and a working Minecraft installation; it does **not** need a separate bot, permanent API daemon, or Python dependencies.
+
+The wizard asks for SSH host/user/port, private key, known_hosts, absolute remote Minecraft folder, ID/name, launcher and game/RCON ports. It verifies SSH and available ports, saves the remote `server.properties` with backup, and updates the bot's local `servers.json` / private `.env`. Remote RCON is executed on localhost on the remote host through SSH, without exposing its port publicly.
+
+All Telegram control paths support remote start/stop/restart, status, console, mods (SFTP), logs, auto-stop, manual and offline scheduled world backups with retention. Minecraft world ZIPs remain on the remote disk; event history is stored locally under `logs/remote_events/<server-id>`. Control API file browsing/reading also runs on the remote host. SSH failure is treated as connection unavailable, **not as a stopped server**.
+
+Use a dedicated non-root remote Linux user with access to the Minecraft folder and a restricted network path (Tailscale/WireGuard where appropriate). A remotely running server not launched through this manager may be detected via its ports but cannot be safely force-stopped if RCON is broken. The host-information UI refers to the bot host. Test with a disposable remote world before production.
+
 ### Add Minecraft servers interactively
 
 Use `python3 scripts/manage_servers.py` to register a **pre-installed** Minecraft server without hand-editing `servers.json`. Enter its installation directory, ID, display name, launcher command and game/RCON ports. The CLI checks for port conflicts, offers free defaults, reads or generates the RCON password without displaying it, and previews changes before confirmation.
