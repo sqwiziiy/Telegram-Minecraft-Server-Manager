@@ -97,11 +97,14 @@ def _telegram_actor(user) -> str:
 
 
 async def _events_text(server) -> str:
-    process = await server.manager.status()
-    if process.running:
-        state = f"🟢 Работает · аптайм {process.uptime_seconds // 60} мин"
-    else:
-        state = "⚫ Остановлен"
+    try:
+        process = await server.manager.status()
+        if process.running:
+            state = f"🟢 Работает · аптайм {process.uptime_seconds // 60} мин"
+        else:
+            state = "⚫ Остановлен"
+    except Exception as exc:  # noqa: BLE001
+        state = f"❔ Связь недоступна: {html.escape(str(exc)[:200])}"
 
     entries = await event_history.recent(server, limit=20)
     history = event_history.render(entries)
