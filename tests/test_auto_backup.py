@@ -66,12 +66,12 @@ class AutoBackupTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(recovered.status(server)["pending"])
                 server.manager.status.return_value = ServerStatus(running=False)
                 await recovered.check_server(server)
-                backup.assert_awaited_once_with(server)
+                backup.assert_awaited_once_with(server, automatic=True)
                 self.assertFalse(recovered.status(server)["pending"])
                 self.assertGreater(recovered.status(server)["next_due_at"], time.time())
 
                 await recovered.check_server(server)
-                backup.assert_awaited_once_with(server)
+                backup.assert_awaited_once_with(server, automatic=True)
 
     async def test_overdue_after_restart_runs_when_server_off(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -88,7 +88,7 @@ class AutoBackupTests(unittest.IsolatedAsyncioTestCase):
                 patch("services.auto_backup.create_backup", new_callable=AsyncMock, return_value="✅ ok") as backup,
             ):
                 await recovered.check_server(server)
-                backup.assert_awaited_once_with(server)
+                backup.assert_awaited_once_with(server, automatic=True)
                 self.assertFalse(recovered.status(server)["pending"])
 
     async def test_failed_backup_is_pending_with_retry_backoff(self) -> None:
@@ -105,7 +105,7 @@ class AutoBackupTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(manager.status(server)["pending"])
                 self.assertTrue(AutoBackupManager(manager.state_file).status(server)["pending"])
                 await manager.check_server(server)
-                backup.assert_awaited_once_with(server)
+                backup.assert_awaited_once_with(server, automatic=True)
 
     async def test_invalid_interval_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
