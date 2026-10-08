@@ -77,13 +77,13 @@ async def _create_backup_unlocked(server: ManagedServer | None = None, *, automa
                     )
                     if retention.deleted_count:
                         retention_text = (
-                            f"\\n🗑 Удалено старых автобэкапов: <code>{retention.deleted_count}</code>"
+                            f"\n🗑 Удалено старых автобэкапов: <code>{retention.deleted_count}</code>"
                         )
                     if not retention.within_limits:
-                        retention_text += "\\n⚠️ Лимит хранения не достигнут; новый архив сохранён."
+                        retention_text += "\n⚠️ Лимит хранения не достигнут; новый архив сохранён."
                 except Exception:
                     logger.exception("Retention cleanup failed for %s", server.server_id)
-                    retention_text = "\\n⚠️ Не удалось очистить старые автобэкапы."
+                    retention_text = "\n⚠️ Не удалось очистить старые автобэкапы."
         logger.info("Backup created: %s (%.1f MB)", archive_path, size_mb)
         return (
             "✅ <b>Бэкап создан</b>\n"
