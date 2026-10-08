@@ -29,6 +29,7 @@ from config import (
 )
 from services.rcon import send_rcon_command
 from services.server_process import ServerProcessManager, server_process_manager
+from services.remote_ssh import SSHSettings, SSHRemote, RemoteServerProcessManager
 
 logger = logging.getLogger(__name__)
 _SERVER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -38,7 +39,7 @@ _SERVER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 class ManagedServer:
     server_id: str
     server_name: str
-    manager: ServerProcessManager
+    manager: ServerProcessManager | RemoteServerProcessManager
     rcon_host: str
     rcon_port: int
     rcon_password: str
@@ -49,12 +50,19 @@ class ManagedServer:
     auto_stop_seconds: int = 0
     backup_retention_max_count: int = 0
     backup_retention_max_gb: float = 0.0
+    ssh_remote: SSHRemote | None = None
+
+    @property
+    def is_remote(self) -> bool:
+        return self.ssh_remote is not None
 
     @property
     def rcon_configured(self) -> bool:
         return bool(self.rcon_password)
 
     async def rcon(self, command: str) -> str:
+        if self.ssh_remote is not None:
+            return await self.ssh_remote.request("rcon", command=command, timeout=30)
         return await send_rcon_command(
             command,
             host=self.rcon_host,
@@ -226,16 +234,52 @@ class ServerRegistry:
 
             backup_retention_max_count, backup_retention_max_gb = self._retention_limits(raw, server_id)
 
-            manager = ServerProcessManager(
-                server_dir=str(server_dir),
-                start_command=start_command,
-                pid_file=pid_file,
-                output_log=output_log,
-                stop_timeout=stop_timeout,
-                rcon_host=rcon_host,
-                rcon_port=rcon_port,
-                rcon_password=rcon_password,
-            )
+            mode = str(raw.get("type", "local")).strip().lower()
+            ssh_remote: SSHRemote | None = None
+            if mode == "local":
+                manager = ServerProcessManager(
+                    server_dir=str(server_dir),
+                    start_command=start_command,
+                    pid_file=pid_file,
+                    output_log=output_log,
+                    stop_timeout=stop_timeout,
+                    rcon_host=rcon_host,
+                    rcon_port=rcon_port,
+                    rcon_password=rcon_password,
+                )
+            elif mode == "ssh":
+                ssh = raw.get("ssh")
+                if not isinstance(ssh, dict):
+                    raise RuntimeError(f"Server {server_id!r} requires an ssh settings object")
+                try:
+                    settings = SSHSettings(
+                        host=self._required_text(ssh, "host"),
+                        user=self._required_text(ssh, "user"),
+                        port=int(ssh.get("port", 22)),
+                        key_file=self._required_text(ssh, "key_file"),
+                        known_hosts=self._required_text(ssh, "known_hosts"),
+                    )
+                    remote_config = {
+                        "server_dir": str(server_dir),
+                        "start_command": start_command,
+                        "pid_file": pid_file,
+                        "output_log": output_log,
+                        "stop_timeout": stop_timeout,
+                        "rcon_port": rcon_port,
+                        "rcon_password": rcon_password,
+                        "minecraft_log_path": self._path_value(raw, "minecraft_log_path", server_dir / "logs" / "latest.log"),
+                        "mods_dir": self._path_value(raw, "mods_dir", server_dir / "mods"),
+                        "world_dir": self._path_value(raw, "world_dir", server_dir / "world"),
+                        "backup_dir": self._path_value(raw, "backup_dir", server_dir / "backups"),
+                        "backup_retention_max_count": backup_retention_max_count,
+                        "backup_retention_max_gb": backup_retention_max_gb,
+                    }
+                    ssh_remote = SSHRemote(settings, remote_config)
+                except (ValueError, OSError, TypeError) as exc:
+                    raise RuntimeError(f"Invalid SSH configuration for server {server_id!r}: {exc}") from exc
+                manager = RemoteServerProcessManager(ssh_remote)
+            else:
+                raise RuntimeError(f"Server {server_id!r} has unsupported type {mode!r}; expected 'local' or 'ssh'")
 
             self._add(
                 ManagedServer(
@@ -252,6 +296,7 @@ class ServerRegistry:
                     auto_stop_seconds=auto_stop_seconds,
                     backup_retention_max_count=backup_retention_max_count,
                     backup_retention_max_gb=backup_retention_max_gb,
+                    ssh_remote=ssh_remote,
                 )
             )
         return True
