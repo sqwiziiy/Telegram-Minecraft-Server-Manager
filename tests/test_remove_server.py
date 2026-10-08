@@ -197,6 +197,51 @@ class RemoveServerTests(unittest.TestCase):
         self.assertTrue(self.invoke(["4", "2", "remote"]))
         self.assertEqual(self.json_file("servers.json"), [self.local])
 
+    def test_rollback_restores_previous_files_when_second_write_fails(self):
+        from scripts.manage_servers import safe_write as actual_write
+        before = {
+            p.name: p.read_bytes() for p in self.project.iterdir() if p.is_file()
+        }
+        attempts = 0
+
+        def unreliable_write(path, payload, mode):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 2:
+                raise OSError("fake disk failure")
+            return actual_write(path, payload, mode)
+
+        with patch("scripts.manage_servers.safe_write", side_effect=unreliable_write):
+            with self.assertRaisesRegex(ConfigurationError, "Запись не завершена"):
+                self.invoke(["4", "2", "remote"])
+        for name, content in before.items():
+            self.assertEqual((self.project / name).read_bytes(), content)
+        self.assert_files_untouched()
+
+    def test_custom_servers_and_users_paths_are_backed_up(self):
+        (self.project / "servers.json").rename(self.project / "mc_registry.json")
+        (self.project / "users.json").rename(self.project / "access.json")
+        env_path = self.project / ".env"
+        env_path.write_text(env_path.read_text(encoding="utf-8") +
+                            'MINECRAFT_SERVERS_FILE="mc_registry.json"\n'
+                            'ACCESS_USERS_FILE="access.json"\n', encoding="utf-8")
+        self.assertTrue(self.invoke(["4", "2", "remote"]))
+        saved = json.loads((self.project / "mc_registry.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["servers"], [self.local])
+        self.assertEqual(set(self.json_file("access.json")["users"]["123"]["servers"]),
+                         {"survival"})
+        names = self.backup_names()
+        self.assertIn("users.json", names)
+        self.assertIn("servers.json", names)
+
+    def test_corrupted_users_json_aborts_without_changes(self):
+        original = (self.project / "servers.json").read_bytes()
+        (self.project / "users.json").write_text('{"users": broken}', encoding="utf-8")
+        with self.assertRaises(ConfigurationError):
+            self.invoke(["4", "2"])
+        self.assertEqual((self.project / "servers.json").read_bytes(), original)
+        self.assertFalse((self.project / "config_backups").exists())
+
     def test_cannot_delete_if_shell_default_override_points_to_target(self):
         with (
             patch("builtins.input", side_effect=["4", "2"]),
