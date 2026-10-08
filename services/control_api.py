@@ -380,7 +380,7 @@ async def minecraft_list_files(
 ) -> dict:
     """Browse the configured Minecraft server folder without exposing host paths."""
     server = _get_server(server_id)
-    if server.ssh_remote is not None:
+    if getattr(server, 'ssh_remote', None) is not None:
         try:
             response = await server.ssh_remote.request(
                 "list_files", path=path, recursive=recursive, max_entries=max_entries,
@@ -471,7 +471,7 @@ async def minecraft_read_file(
 ) -> dict:
     """Read diagnostic server files directly, with traversal and secret guards."""
     server = _get_server(server_id)
-    if server.ssh_remote is not None:
+    if getattr(server, 'ssh_remote', None) is not None:
         try:
             remote_file = await server.ssh_remote.request(
                 "read_file", path=path, max_bytes=MAX_FILE_READ_BYTES, timeout=45,
