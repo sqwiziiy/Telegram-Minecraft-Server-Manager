@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import fcntl
+import secrets
+from contextlib import contextmanager
 import re
 import shlex
 import signal
@@ -29,6 +32,28 @@ def path(value):
     if not p.is_absolute():
         raise ValueError("Only absolute remote paths are supported")
     return p
+
+
+@contextmanager
+def operation_lock(config):
+    """One lock on the Minecraft host, shared by ALL SSH agent invocations.
+
+    A lock on the Telegram bot would not prevent a second bot or a retry
+    from starting another JVM while Minecraft is still booting.
+    """
+    folder = path(config["server_dir"])
+    if not folder.is_dir():
+        raise FileNotFoundError(str(folder))
+    lock_path = folder / ".telegram-mc-manager.lock"
+    fd = os.open(
+        lock_path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600
+    )
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def process_alive(pid, started):
@@ -113,14 +138,28 @@ def launch(config):
             argv, cwd=folder, stdin=subprocess.DEVNULL, stdout=output,
             stderr=subprocess.STDOUT, start_new_session=True, close_fds=True,
         )
-    time.sleep(0.8)
-    if child.poll() is not None:
-        raise RuntimeError(f"Minecraft exited early ({child.returncode}); check {log}")
+    # Persist identity immediately, before the startup wait: if the SSH
+    # session vanishes right after Popen, a second start must still see it.
+    try:
+        start_ticks = ticks_for(child.pid)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Minecraft exited before its PID could be recorded; check {log}") from exc
     record_path = path(config["pid_file"])
     record_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = record_path.with_name(record_path.name + ".tmp")
-    temporary.write_text(json.dumps({"pid": child.pid, "start_ticks": ticks_for(child.pid)}))
-    os.replace(temporary, record_path)
+    temporary = record_path.with_name(record_path.name + "." + secrets.token_hex(8) + ".tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as stream:
+            os.chmod(temporary, 0o600)
+            json.dump({"pid": child.pid, "start_ticks": start_ticks}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, record_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    time.sleep(0.8)
+    if child.poll() is not None:
+        record_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Minecraft exited early ({child.returncode}); check {log}")
     return "started"
 
 
@@ -168,18 +207,16 @@ def terminate(config):
     state = get_status(config)
     if not state["running"]:
         return "already_stopped"
+    # An open port is only a hint. Never send a destructive RCON command
+    # to a possibly unrelated / externally managed Minecraft process.
+    record = pid_record(config)
+    if record is None:
+        raise RuntimeError(
+            "Minecraft port is open but no managed PID was found. "
+            "Refusing to stop an unmanaged or unrelated process."
+        )
+    pid, started = record
     answer = rcon(config, "stop")
-    pid = state["pid"]
-    if pid is None:
-        if answer.startswith("❌"):
-            raise RuntimeError("Unmanaged running server: RCON stop failed")
-        deadline = time.monotonic() + max(5, float(config.get("stop_timeout", 45)))
-        while time.monotonic() < deadline:
-            if not rcon_available(config):
-                return "stopped"
-            time.sleep(0.5)
-        raise RuntimeError("Unmanaged server is still running")
-    started = pid_record(config)[1]
     timeout = max(5, float(config.get("stop_timeout", 45)))
     if not answer.startswith("❌"):
         deadline = time.monotonic() + timeout
@@ -199,7 +236,13 @@ def terminate(config):
         if not process_alive(pid, started):
             return "stopped"
         try:
-            os.killpg(os.getpgid(pid), sig)
+            group = os.getpgid(pid)
+            if group != pid:
+                raise RuntimeError(
+                    "Managed process no longer owns its process group; "
+                    "refusing to signal an unrelated group"
+                )
+            os.killpg(group, sig)
         except ProcessLookupError:
             return "stopped"
         deadline = time.monotonic() + delay
@@ -207,7 +250,7 @@ def terminate(config):
             if not process_alive(pid, started):
                 return "stopped" if sig == signal.SIGTERM else "killed"
             time.sleep(0.25)
-    return "killed"
+    raise RuntimeError("Minecraft did not exit after SIGKILL; stop is not confirmed")
 
 
 def list_mods(config):
@@ -446,13 +489,20 @@ def dispatch(request):
         return configure_properties(expected_config, request["content"])
     if action == "status":
         return get_status(config)
-    if action == "start":
-        return launch(config)
-    if action == "stop":
-        return terminate(config)
-    if action == "restart":
-        terminate(config)
-        return launch(config)
+    if action in ("start", "stop", "restart", "backup"):
+        # Lock on the remote filesystem rather than in a single bot process.
+        # The lock also protects long offline backups from concurrent starts.
+        with operation_lock(config):
+            if action == "start":
+                return launch(config)
+            if action == "stop":
+                return terminate(config)
+            if action == "restart":
+                terminate(config)
+                if get_status(config)["running"]:
+                    raise RuntimeError("Minecraft is still running; refusing a second start")
+                return launch(config)
+            return make_backup(config, bool(request.get("automatic", False)))
     if action == "rcon":
         return rcon(config, request["command"])
     if action == "tail_output":
@@ -463,8 +513,6 @@ def dispatch(request):
         return remove_mod(config, request["filename"])
     if action == "commit_mod":
         return commit_mod(config, request["filename"], request["temporary_name"])
-    if action == "backup":
-        return make_backup(config, bool(request.get("automatic", False)))
     if action == "list_files":
         return browse_files(config, request.get("path", "."), bool(request.get("recursive", False)),
                             max(1, min(1000, int(request.get("max_entries", 200)))))
