@@ -40,7 +40,12 @@ dp.include_router(system.router)
 async def _monitor_server(server) -> None:
     while True:
         try:
-            async for line in tail_log(server.minecraft_log_path):
+            source = (
+                server.ssh_remote.follow_log(server.minecraft_log_path)
+                if server.ssh_remote is not None
+                else tail_log(server.minecraft_log_path)
+            )
+            async for line in source:
                 await auto_stop_manager.handle_line(server, line)
                 await event_history.record_line(server, line)
         except FileNotFoundError:
