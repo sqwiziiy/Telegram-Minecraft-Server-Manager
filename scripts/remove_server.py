@@ -203,6 +203,10 @@ def remove_registered_server(
             True,
         ))
     labels = {}
+    if servers_path.name != "servers.json":
+        labels[servers_path] = "servers.json"
+    if users_path.name != "users.json":
+        labels[users_path] = "users.json"
     for path, old, new, label in (
         (stop_path, stop_original, stop_new, "auto_stop_state.json"),
         (backup_path, backup_original, backup_new, "auto_backup_state.json"),
