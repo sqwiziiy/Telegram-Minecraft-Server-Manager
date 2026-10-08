@@ -21,6 +21,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 from scripts.manage_users import ConfigurationError, configured_path, read_simple_env  # noqa: E402
 from scripts.config_backups import save_config_backup  # noqa: E402
+from services.server_software import choose_software, SOFTWARE_NAMES  # noqa: E402
 
 SERVER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 VALID_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -268,13 +269,14 @@ def check_launcher(directory: Path, command: str) -> None:
 
 def build_entry(
     sid: str, name: str, directory: Path, command: str,
-    rcon_port: int, env_key: str, world_name: str,
+    rcon_port: int, env_key: str, world_name: str, server_software: str = "mods",
 ) -> dict:
     result = {
         "id": sid, "name": name,
         "server_dir": str(directory), "start_command": command,
         "rcon_host": "127.0.0.1", "rcon_port": rcon_port,
         "rcon_password_env": env_key,
+        "server_software": server_software,
         "auto_stop_seconds": 0,
         "backup_retention_max_count": 0,
         "backup_retention_max_gb": 0,
@@ -330,6 +332,9 @@ def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
     default_command = find_launcher(directory)
     start_command = ask_text("Команда запуска Minecraft", default_command)
     check_launcher(directory, start_command)
+    server_software = choose_software(
+        (directory / "mods").is_dir(), (directory / "plugins").is_dir()
+    )
     props_path = directory / "server.properties"
     props_original = read_bytes(props_path)
     try:
@@ -386,7 +391,7 @@ def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
         "rcon.port": str(rcon_port),
         "rcon.password": password,
     }).encode("utf-8")
-    entry = build_entry(sid, name, directory, start_command, rcon_port, key, world_name)
+    entry = build_entry(sid, name, directory, start_command, rcon_port, key, world_name, server_software)
     servers.append(entry)
 
     print("\n── Проверка перед сохранением ──")
@@ -394,6 +399,7 @@ def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
     print(f"ID:             {sid}")
     print(f"Папка:          {directory}")
     print(f"Запуск:         {start_command}")
+    print(f"Тип Minecraft:  {SOFTWARE_NAMES[server_software]}")
     print(f"Minecraft:      {game_port}/TCP")
     print(f"RCON:           127.0.0.1:{rcon_port}")
     print(f"RCON-пароль:    скрыт (ключ {key} в .env)")
