@@ -27,7 +27,10 @@ async def _server_picker(user_id: int):
 
 
 async def _home_text(server) -> str:
-    process = await server.manager.status()
+    try:
+        process = await server.manager.status()
+    except Exception as exc:  # noqa: BLE001
+        return f"🌩 <b>{html.escape(server.server_name)}</b>\n❔ Связь с сервером недоступна: <code>{html.escape(str(exc)[:250])}</code>"
     if not process.running:
         return f"🌩 <b>{html.escape(server.server_name)}</b>\n⚫ Остановлен"
     players = await server.rcon("list") if server.rcon_configured else "нет данных"
