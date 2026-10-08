@@ -48,7 +48,8 @@ class SSHWizardTests(unittest.TestCase):
             remote_properties = "server-port=25565\nrcon.port=25575\nrcon.password=existing\nmax-players=4\n"
             async def fake_request(self, action, **params):
                 if action == "probe":
-                    return {"properties": remote_properties, "launchers": ["start-server.sh"]}
+                    return {"properties": remote_properties, "launchers": ["start-server.sh"],
+                            "has_mods": False, "has_plugins": True}
                 if action == "port_available":
                     return True
                 if action == "configure_properties":
@@ -73,7 +74,7 @@ class SSHWizardTests(unittest.TestCase):
             added = data["servers"][1]
             self.assertEqual(added["id"], "test-server")
             self.assertEqual(added["type"], "ssh")
-            self.assertEqual(added["server_software"], "vanilla")
+            self.assertEqual(added["server_software"], "plugins")
             self.assertEqual(added["ssh"]["host"], "remote.example")
             self.assertEqual(added["ssh"]["user"], "mc")
             self.assertEqual(added["minecraft_port"], 25566)
