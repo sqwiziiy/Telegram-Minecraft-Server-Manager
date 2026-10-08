@@ -343,6 +343,16 @@ def dispatch(request):
         if not folder.is_dir():
             raise FileNotFoundError(str(folder))
         return {"properties": properties(config), "launchers": [name for name in ("start-server.sh", "start.sh", "run.sh") if (folder / name).is_file()], "python": sys.version.split()[0]}
+    if action == "port_available":
+        port = int(request["port"])
+        if not 1 <= port <= 65535:
+            raise ValueError("Invalid TCP port")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            try:
+                listener.bind(("0.0.0.0", port))
+                return True
+            except OSError:
+                return False
     if action == "configure_properties":
         return configure_properties(config, request["content"])
     if action == "status":
