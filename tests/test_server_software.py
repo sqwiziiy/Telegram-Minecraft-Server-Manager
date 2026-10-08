@@ -67,6 +67,33 @@ class SoftwareDetectionTests(unittest.TestCase):
             self.assertEqual(server.server_software, "plugins")
             self.assertEqual(server.mods_dir, str(directory / "plugins"))
 
+    def test_remote_paper_uses_plugins_directory_via_ssh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            key_file = base / "ssh_key"
+            known_file = base / "known_hosts"
+            key_file.write_text("test key", encoding="utf-8")
+            known_file.write_text("host key", encoding="utf-8")
+            remote_root = "/home/minecraft/paper-server"
+            config = base / "servers.json"
+            config.write_text(json.dumps({"servers": [{
+                "id": "paper-ssh", "name": "Paper SSH",
+                "type": "ssh", "server_dir": remote_root,
+                "server_software": "plugins",
+                "ssh": {"host": "192.0.2.5", "user": "minecraft", "port": 22,
+                        "key_file": str(key_file), "known_hosts": str(known_file)},
+                "rcon_port": 25575
+            }]}), encoding="utf-8")
+            with (
+                patch("services.server_registry.MINECRAFT_SERVERS_FILE", str(config)),
+                patch("services.server_registry.DEFAULT_SERVER_ID", "paper-ssh"),
+            ):
+                server = ServerRegistry().get("paper-ssh")
+            self.assertEqual(server.server_software, "plugins")
+            self.assertEqual(server.mods_dir, remote_root + "/plugins")
+            self.assertIsNotNone(server.ssh_remote)
+            self.assertEqual(server.ssh_remote.config["mods_dir"], remote_root + "/plugins")
+
     def test_unknown_software_fails_fast(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
