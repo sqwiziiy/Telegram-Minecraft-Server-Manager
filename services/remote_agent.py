@@ -393,7 +393,8 @@ def browse_files(config, relative, recursive, limit):
         except (OSError, ValueError):
             continue
     entries.sort(key=lambda value: (value["type"] != "directory", value["path"].casefold()))
-    return {"path": str(folder.relative_to(root)) or ".", "recursive": recursive,
+    rel = str(folder.relative_to(root))
+    return {"path": rel or ".", "recursive": recursive,
             "truncated": len(entries) >= limit, "entries": entries}
 
 
