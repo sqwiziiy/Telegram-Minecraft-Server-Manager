@@ -17,12 +17,20 @@ async def _server_picker(user_id: int):
     servers = [s for s in server_registry.list() if access_control.server_ids_for(user_id, [s.server_id])]
     if not servers:
         return "⛔ У вас нет доступа ни к одному Minecraft-серверу.", None
-    statuses = {s.server_id: (await s.manager.status()).running for s in servers}
-    return "🎮 <b>Minecraft Server Manager</b>\n\nВыберите сервер:", server_list_keyboard(servers, statuses, show_host=access_control.can_system(user_id))
+    statuses: dict[str, bool | None] = {}
+    for server in servers:
+        try:
+            statuses[server.server_id] = (await server.manager.status()).running
+        except Exception:  # SSH unavailable must NOT masquerade as stopped.
+            statuses[server.server_id] = None
+    return "🎮 <b>Minecraft Server Manager</b>\n\nВыберите сервер (❔ — связь недоступна):", server_list_keyboard(servers, statuses, show_host=access_control.can_system(user_id))
 
 
 async def _home_text(server) -> str:
-    process = await server.manager.status()
+    try:
+        process = await server.manager.status()
+    except Exception as exc:  # noqa: BLE001
+        return f"🌩 <b>{html.escape(server.server_name)}</b>\n❔ Связь с сервером недоступна: <code>{html.escape(str(exc)[:250])}</code>"
     if not process.running:
         return f"🌩 <b>{html.escape(server.server_name)}</b>\n⚫ Остановлен"
     players = await server.rcon("list") if server.rcon_configured else "нет данных"

@@ -94,6 +94,32 @@ STORM_SURVIVAL_RCON_PASSWORD=replace_me
 
 The two CLI editors write timestamped snapshots to the bot project's **`config_backups/`** folder: `users.json`, `servers.json`, `.env` and server-specific `server.properties` backups. Snapshots are private (`0600`) inside a private directory (`0700`) and ignored by Git. Old `.bak-*` files are not automatically moved. Minecraft world ZIP backups are unrelated and remain in each server's configured backup directory.
 
+### Minecraft server software profiles (Vanilla / Mods / Plugins)
+
+Use `server_software` in each `servers.json` entry (separate from `type`, which denotes local/ssh). Values: `vanilla` (no addon tab or stale addon callbacks), `mods` (Fabric, Forge, NeoForge, Quilt; `mods/` tab), `plugins` (Paper, Spigot, Purpur; `plugins/` tab). `mods_dir` and `plugins_dir` can override the corresponding directory. Existing entries without this key default to `mods` to maintain previous behavior.
+
+Both local and SSH wizards check for `mods/` and `plugins/` and suggest the type while allowing manual override; absence of both directories does **not** prove the server is Vanilla. To edit a previously registered server, run `python3 scripts/manage_servers.py` and select **3: Change existing server type**, then select the server and software profile. Existing policies, SSH credentials, launcher, ports and worlds remain unchanged. Configuration snapshots are saved to `config_backups/`.
+
+### Remote Linux Minecraft servers over SSH (v2.0.0)
+
+**Available in v2.0.0 and later.** The `scripts/manage_servers.py` wizard offers either local setup or remote Linux connection over SSH. Use SSH key authentication and a strictly verified host key from the bot service account's `known_hosts`. The remote machine needs OpenSSH, Python 3.10+, and a working Minecraft installation; it does **not** need a separate bot, permanent API daemon, or Python dependencies.
+
+The wizard asks for SSH host/user/port, private key, known_hosts, absolute remote Minecraft folder, ID/name, launcher and game/RCON ports. It verifies SSH and available ports, saves the remote `server.properties` with backup, and updates the bot's local `servers.json` / private `.env`. Remote RCON is executed on localhost on the remote host through SSH, without exposing its port publicly.
+
+All Telegram control paths support remote start/stop/restart, status, console, mods (SFTP), logs, auto-stop, manual and offline scheduled world backups with retention. Minecraft world ZIPs remain on the remote disk; event history is stored locally under `logs/remote_events/<server-id>`. Control API file browsing/reading also runs on the remote host. SSH failure is treated as connection unavailable, **not as a stopped server**.
+
+Use a dedicated non-root remote Linux user with access to the Minecraft folder and a restricted network path (Tailscale/WireGuard where appropriate). A remotely running server not launched through this manager may be detected via its ports, but the bot deliberately **refuses unmanaged stop/RCON/live backup commands**, even if a socket responds: a port is not proof of process identity. The host-information UI refers to the bot host. Test with a disposable remote world before production.
+
+
+
+**Resilience / recovery:** Remote start, stop, restart and backup operations use a host-side `flock` lock (under `server_dir`), preventing races across SSH sessions/bot instances and protecting offline backups from concurrent starts. Managed PID records include process start ticks and Linux boot ID, and are written before the startup wait to survive a short SSH disconnect. ZIP archives are published only after a complete `.partial` write; leftovers from interrupted attempts are cleaned on the next backup. If an SSH connection fails after a request was sent, its outcome is **uncertain**: check status/archives before retrying. A force-killed agent during a live backup may leave Minecraft saving disabled: verify/re-enable with `save-on` if that rare scenario occurs.
+
+Run `./venv/bin/python scripts/check_remote_servers.py --server test` (change server ID) as the bot's Unix account for a **read-only** SSH/host-key/status health check. The command does not print the RCON password or remote server.properties. To secure the key, prefer a dedicated non-root Minecraft Unix user with limited folder access, private-key mode `0600`, and OpenSSH `restrict`/`from="stable_source_ip"` authorized_keys options where applicable (not a forced `command=`, since the manager needs SSH exec and SFTP). Do not disable host-key checking.
+
+**Reboot test:** Reboot the bot host and verify SSH still authenticates with the service account's key. After rebooting the Minecraft host, the bot reconnects once SSH returns, but Minecraft itself is **not auto-started** by this integration.
+
+**About systemd `Found left-over process (java)`:** With `KillMode=process`, a local Java Minecraft child deliberately survives a restart of the Telegram service and remains in its old cgroup. The warning/peak memory display is expected in the current architecture. Do **not** switch to `KillMode=control-group` or `mixed`: this could kill the running world. Completely clean process/cgroup separation requires a separate Minecraft unit/scope and a planned migration; this PR does not migrate live Java processes.
+
 ### Add Minecraft servers interactively
 
 Use `python3 scripts/manage_servers.py` to register a **pre-installed** Minecraft server without hand-editing `servers.json`. Enter its installation directory, ID, display name, launcher command and game/RCON ports. The CLI checks for port conflicts, offers free defaults, reads or generates the RCON password without displaying it, and previews changes before confirmation.

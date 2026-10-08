@@ -113,7 +113,7 @@ class ManageServersTests(unittest.TestCase):
             with (
                 patch.dict(os.environ, {"MINECRAFT_SERVERS_FILE": ""}),
                 patch("builtins.input", side_effect=[
-                    str(test), "", "", "", "", "", "", "да",
+                    "1", str(test), "", "", "", "", "", "", "", "да",
                 ]),
                 patch("scripts.manage_servers.available_port", return_value=True),
                 patch("scripts.manage_servers.secrets.token_hex", return_value="strong-test-password"),
@@ -125,6 +125,7 @@ class ManageServersTests(unittest.TestCase):
             self.assertEqual(data["servers"][0], servers["servers"][0])
             added = data["servers"][1]
             self.assertEqual(added["id"], "test-server")
+            self.assertEqual(added["server_software"], "vanilla")
             self.assertEqual(added["start_command"], "./start-server.sh")
             self.assertEqual(added["rcon_port"], 25576)
             self.assertEqual(added["world_dir"], str(test / "customworld"))
@@ -163,7 +164,7 @@ class ManageServersTests(unittest.TestCase):
             initial = [(p, p.read_bytes()) for p in (bot / ".env", bot / "servers.json")]
             with (
                 patch("builtins.input", side_effect=[
-                    str(server), "", "", "", "", "", "", "нет",
+                    "1", str(server), "", "", "", "", "", "", "", "нет",
                 ]),
                 patch("scripts.manage_servers.available_port", return_value=True),
                 patch("sys.stdout", new_callable=io.StringIO),
@@ -184,7 +185,7 @@ class ManageServersTests(unittest.TestCase):
                 "id": "storm", "server_dir": str(server),
             }]}), encoding="utf-8")
             with (
-                patch("builtins.input", return_value=str(server)),
+                patch("builtins.input", side_effect=["1", str(server)]),
                 patch("sys.stdout", new_callable=io.StringIO),
             ):
                 with self.assertRaisesRegex(ConfigurationError, "уже подключ"):

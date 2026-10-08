@@ -97,11 +97,14 @@ def _telegram_actor(user) -> str:
 
 
 async def _events_text(server) -> str:
-    process = await server.manager.status()
-    if process.running:
-        state = f"🟢 Работает · аптайм {process.uptime_seconds // 60} мин"
-    else:
-        state = "⚫ Остановлен"
+    try:
+        process = await server.manager.status()
+        if process.running:
+            state = f"🟢 Работает · аптайм {process.uptime_seconds // 60} мин"
+        else:
+            state = "⚫ Остановлен"
+    except Exception as exc:  # noqa: BLE001
+        state = f"❔ Связь недоступна: {html.escape(str(exc)[:200])}"
 
     entries = await event_history.recent(server, limit=20)
     history = event_history.render(entries)
@@ -454,7 +457,11 @@ async def server_logs(callback: CallbackQuery) -> None:
     if not access_control.can_server(callback.from_user.id, server_id, "logs.view"):
         await deny_access(callback)
         return
-    output = await server.manager.tail_output(30) or "(лог запуска пока пуст)"
+    try:
+        output = await server.manager.tail_output(30) or "(лог запуска пока пуст)"
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"SSH: {str(exc)[:120]}", show_alert=True)
+        return
     await callback.message.edit_text(
         f"📜 <b>Логи · {html.escape(server.server_name)}</b>\n\n"
         f"<pre>{html.escape(output[-3500:])}</pre>",

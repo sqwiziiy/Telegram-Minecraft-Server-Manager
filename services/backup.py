@@ -39,6 +39,31 @@ async def _prepare_live_backup(server: ManagedServer) -> tuple[bool, str | None]
 async def _create_backup_unlocked(server: ManagedServer | None = None, *, automatic: bool = False) -> str:
     """Create a consistent ZIP backup, coordinating with a live server through RCON."""
     server = server or server_registry.default()
+    if getattr(server, 'ssh_remote', None) is not None:
+        # All filesystem and RCON operations occur ON the remote machine.
+        # World ZIPs never stream through the bot unless explicitly requested.
+        try:
+            result = await server.ssh_remote.request(
+                "backup", automatic=automatic, timeout=4 * 60 * 60
+            )
+            retention_text = ""
+            if automatic:
+                if result.get("deleted_count"):
+                    retention_text = (
+                        f"\n🗑 Удалено старых автобэкапов: "
+                        f"<code>{int(result['deleted_count'])}</code>"
+                    )
+                if not result.get("within_limits", True):
+                    retention_text += "\n⚠️ Лимит хранения не достигнут; новый архив сохранён."
+            return (
+                "✅ <b>Бэкап создан на удалённом сервере</b>\n"
+                f"<code>{html.escape(str(result['path']))}</code>\n"
+                f"Размер: <code>{float(result['size_mb']):.1f} MB</code>"
+                f"{retention_text}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Remote backup failed for %s", server.server_id)
+            return f"❌ Ошибка удалённого бэкапа: <code>{html.escape(str(exc))}</code>"
     backup_dir = server.backup_dir
     world_dir = server.world_dir
     os.makedirs(backup_dir, exist_ok=True)

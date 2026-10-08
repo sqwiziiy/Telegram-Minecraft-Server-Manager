@@ -2,51 +2,54 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased] - v1.1.0
+## [v2.0.0] - 2026-10-08
+
+**Multi-Server & Remote Management Update.** Consolidates the previously unreleased multi-server, user-permission, event-history, automation, control-API and SSH-management features.
 
 ### Added
 
-- Granular per-user access control through `users.json`.
-- Built-in `owner`, `admin`, `operator`, `viewer` and `custom` roles.
-- Per-user `allow` and `deny` permission overrides.
-- `OWNER_IDS` for full-access owners while keeping legacy `ADMIN_IDS` compatibility.
-- Permission-aware Telegram menus and read-only mod listings.
-- Unit tests for access policy resolution and operator UI visibility.
-- Persistent per-server event history with daily `logs/events/YYYY-MM-DD.log` files.\n- Separate Telegram `📋 События` tab with recent activity, refresh and today's downloadable log.\n- Server lifecycle audit entries for Telegram/API start, stop, restart, server-ready, auto-stop and manager detection.
-- Multi-server registry with independent process/RCON configuration per server.
-- Event-driven empty-server auto-stop with Telegram controls and persisted timeout settings.
-- Optional bearer-authenticated external Control API with stable OpenAPI operation IDs for bots, AI agents, Open WebUI/Jarvis, automation systems and scripts.
-- Read-only Control API file inspection for logs, crash reports and diagnostics with path confinement and secret redaction.
+- Registry of independently configured Minecraft servers, each with its own local/SSH transport, process lifecycle, RCON, status, world backups and settings.
+- SSH remote Linux server management: launch, stop, restart, health, console, event log monitoring, mods/plugins through SFTP, on-host world backups and log/file inspection; no permanent remote daemon required.
+- Per-server `server_software` choices: `vanilla`, `mods` and `plugins` (Paper/Spigot/Purpur), with appropriate Telegram tabs and addon directories.
+- Local/remote installation detection and assisted software profile selection; an editor for existing server software profiles.
+- Interactive `scripts/manage_servers.py` and `scripts/manage_users.py` for registration and permission configuration; private `config_backups/` snapshots.
+- `OWNER_IDS`, per-user roles (owner/admin/operator/viewer/custom), explicit per-server permissions and deny overrides.
+- Event-driven empty-server auto-stop, persistent scheduled offline ZIP backups and automatic backup retention controls.
+- Per-server event history, Telegram event-view tab and daily logs.
+- Optional bearer-authenticated Control API with OpenAPI IDs, guarded server file inspection and secret redaction.
+- Read-only SSH diagnostic tool at `scripts/check_remote_servers.py`.
 
 ### Changed
 
-- Telegram `📜 Logs` and `💾 Backup` now reuse the existing server panel message instead of creating extra chat messages; both provide consistent back navigation.\n- Host disk usage is now measured for configurable `HOST_DISK_PATH` (default `/home`) instead of always using `/`.\n
-- The documented systemd unit now uses `KillMode=process` so stopping or restarting the Telegram manager no longer kills Minecraft Java processes that it launched.
+- Telegram UI shows a server selector and uses context-aware actions and permissions for each server.
+- Logs and backup results edit the existing Telegram panel message with consistent back navigation.
+- Live event notifications are consolidated instead of sending a new message per line.
+- Host disk reporting uses `HOST_DISK_PATH` (default `/home`).
+- `KillMode=process` remains the recommended manager systemd setting, preserving locally launched Minecraft across Telegram-bot restarts.
+- Deprecated Jarvis-specific API configuration in favor of generic `CONTROL_API_*` environment variables, retaining legacy aliases.
 
-- Live Minecraft events now edit a single feed message instead of creating a new Telegram message for every event.
-- Event lines are parsed into compact join/leave/chat/death entries while preserving the original death reason.
-- Auto-stop runs locally inside the manager and does not depend on an AI client or recurring API polling.
-- Generic `CONTROL_API_*` configuration replaces Jarvis-specific naming for new setups; legacy `JARVIS_API_*` variables remain supported.
-- API documentation now treats Jarvis/Open WebUI as one possible client rather than part of the manager core.
+### Reliability and security
 
-### Security
+- SSH host identity validated through `known_hosts`, key authentication and server-local RCON; no exposed remote RCON listener.
+- Host-side Linux file lock serializes remote start/stop/restart/backup, preventing double starts and races with offline backups.
+- Managed PID validation includes process start ticks and Linux boot ID, and records PID immediately after launch.
+- Unmanaged/unrecognized remote processes cannot be sent destructive RCON/stop commands or live backup operations by the bot.
+- Remote ZIP backups are first written as `.partial` files and published atomically after successful completion.
+- Better SSH error diagnostics, upload timeouts and safe handling of ambiguous results after SSH transport drops.
+- Sensitive Telegram handlers check permissions server-side; UI hiding alone is not relied on for authorization.
+- Safe default roles, path confinement and redaction for remote read operations.
+- CI verified 138 unit tests, Python compilation and accidental-secret checks; eight additional maintainer-run release checks passed.
 
-- Sensitive handlers and callbacks enforce permissions server-side; hidden buttons are not treated as an authorization boundary.
-- Unknown users, roles and permission names fail closed.
-- The default `operator` role cannot use RCON, upload/delete mods, view launch logs or create backups.
-- Persistent event-history access is controlled separately by `events.view`; raw manager launch logs still require `logs.view`.
+### Migration from v1.0.0
 
-### Migration
-
-Existing v1.0 installations using only `ADMIN_IDS` keep full access without changes.
-
-For new setups, configure owners with:
-
-```env
-OWNER_IDS=123456789
-```
-
-Then copy `users.example.json` to `users.json` for limited-access users.
+- Existing single-server configuration and `ADMIN_IDS` continue to work. For dedicated owners set `OWNER_IDS` and configure access to new servers through `scripts/manage_users.py`.
+- Existing `servers.json` entries default to `type: local` and `server_software: mods`, preserving previous behavior.
+- Upgrade dependencies using the Python environment from the **systemd ExecStart** command; SSH support requires `asyncssh`.
+- Use `scripts/manage_servers.py` to add or edit server entries, which writes recoverable configuration backups.
+- Keep `KillMode=process` for locally managed worlds. Systemd may report an expected leftover Java process; do not switch to `control-group` to hide that warning.
+- For SSH configure non-interactive authentication for the service user, `known_hosts` pinning, and least-privilege access; do not open RCON to the public network.
+- Remote host reboot does not automatically launch Minecraft unless configured separately. If SSH dies during a destructive action, refresh state before retrying.
+- See `RELEASE_NOTES_v2.0.0.md` and both READMEs for detailed upgrade instructions.
 
 ## [v1.0.0] - 2026-09-20
 

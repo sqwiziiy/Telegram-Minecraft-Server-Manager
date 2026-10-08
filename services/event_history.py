@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+from config import PROJECT_DIR
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -153,6 +155,9 @@ class EventHistory:
     """Persistent per-server history stored as one human-readable log per day."""
 
     def log_dir(self, server: "ManagedServer") -> Path:
+        if getattr(server, 'ssh_remote', None) is not None:
+            # History is collected by the bot and stored locally per remote server.
+            return PROJECT_DIR / "logs" / "remote_events" / server.server_id
         return server.manager.server_dir / "logs" / "events"
 
     def today_path(self, server: "ManagedServer") -> Path:

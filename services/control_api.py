@@ -380,6 +380,15 @@ async def minecraft_list_files(
 ) -> dict:
     """Browse the configured Minecraft server folder without exposing host paths."""
     server = _get_server(server_id)
+    if getattr(server, 'ssh_remote', None) is not None:
+        try:
+            response = await server.ssh_remote.request(
+                "list_files", path=path, recursive=recursive, max_entries=max_entries,
+                timeout=45,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Remote SSH browse failed: {exc}") from exc
+        return {**_identity(server), **response}
     root, target = _safe_server_path(server, path)
 
     if not target.exists():
@@ -462,6 +471,20 @@ async def minecraft_read_file(
 ) -> dict:
     """Read diagnostic server files directly, with traversal and secret guards."""
     server = _get_server(server_id)
+    if getattr(server, 'ssh_remote', None) is not None:
+        try:
+            remote_file = await server.ssh_remote.request(
+                "read_file", path=path, max_bytes=MAX_FILE_READ_BYTES, timeout=45,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Remote SSH read failed: {exc}") from exc
+        content = _redact_sensitive_lines(remote_file["content"])
+        return {
+            **_identity(server), "path": remote_file["path"],
+            "gzip_decompressed": remote_file["gzip_decompressed"],
+            "truncated": len(content) > max_chars,
+            "content": content[:max_chars],
+        }
     root, target = _safe_server_path(server, path)
 
     if not target.exists():

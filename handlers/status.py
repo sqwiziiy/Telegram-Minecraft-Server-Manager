@@ -18,7 +18,10 @@ def _format_uptime(seconds: int) -> str:
 
 
 async def _status_text(server) -> str:
-    process = await server.manager.status()
+    try:
+        process = await server.manager.status()
+    except Exception as exc:  # noqa: BLE001
+        return f"🌩 <b>{html.escape(server.server_name)}</b>\n\n❔ SSH недоступен: <code>{html.escape(str(exc)[:230])}</code>"
     if not process.running:
         return f"🌩 <b>{html.escape(server.server_name)}</b>\n\n⚫ Остановлен"
     players = await server.rcon("list") if server.rcon_configured else "нет данных"
