@@ -60,6 +60,12 @@ _auto_stop_state_path = Path(os.getenv("AUTO_STOP_STATE_FILE", "auto_stop_state.
 if not _auto_stop_state_path.is_absolute():
     _auto_stop_state_path = PROJECT_DIR / _auto_stop_state_path
 AUTO_STOP_STATE_FILE: str = str(_auto_stop_state_path.resolve())
+# Persisted automatic backup schedules (one per configured server).
+_auto_backup_state_path = Path(os.getenv("AUTO_BACKUP_STATE_FILE", "auto_backup_state.json")).expanduser()
+if not _auto_backup_state_path.is_absolute():
+    _auto_backup_state_path = PROJECT_DIR / _auto_backup_state_path
+AUTO_BACKUP_STATE_FILE: str = str(_auto_backup_state_path.resolve())
+
 AUTO_STOP_DEFAULT_SECONDS: int = int(os.getenv("AUTO_STOP_DEFAULT_SECONDS", "0"))
 if not 0 <= AUTO_STOP_DEFAULT_SECONDS <= 86400:
     raise RuntimeError("AUTO_STOP_DEFAULT_SECONDS must be between 0 and 86400")
