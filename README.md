@@ -35,7 +35,7 @@ No `sudo systemctl minecraft ...`, no broad sudoers rule, and no hard-coded JAR 
 | 💾 Backups | Create RCON-coordinated ZIP backups with saves paused and flushed |
 | 📜 Logs | Show launch output in the same Telegram panel with refresh/back navigation |
 | 📋 Event history | Separate Telegram tab with persistent daily join/leave/chat/death and server lifecycle logs |
-| ⏱ Auto-stop | Stop an empty server after a configurable timeout, driven locally by join/leave events |
+| ⚙️ Auto-tasks | Event-driven auto-stop plus automatic offline backups (6h, 12h, 24h, 3d, 7d) |
 | 🔌 Control API | Optional bearer-authenticated HTTP/OpenAPI interface for bots, AI agents and scripts |
 | 🔐 Access control | `OWNER_IDS` plus per-user roles and permissions from `users.json` |
 
@@ -163,7 +163,7 @@ source .venv/bin/activate
 python main.py
 ```
 
-The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**. Auto-stop is configured from the same server screen through **⏱ Auto-stop** and works without the external API or any AI client. **📋 События** opens a separate persistent activity/history view; daily files are stored under `logs/events/YYYY-MM-DD.log` inside each server directory.
+The Minecraft server is then started from Telegram → **/start** → choose a server → **⚙️ Управление** → **▶️ Запустить**. Auto-stop is configured under **⚙️ Автозадачи → ⏱ Автостоп**. Automatic backups are configured separately under **⚙️ Автозадачи → 💾 Автобэкап**, with intervals of 6/12/24 hours or 3/7 days. The original **💾 Бэкап** button still creates manual backups even while the server runs. When an automatic backup is due, it waits for Minecraft to be fully stopped (checks every 15 seconds), then creates one ZIP archive; multiple missed intervals collapse into one backup. Failed archives are retried no more often than every five minutes. Schedules and pending backups survive bot restarts. **📋 События** opens a separate persistent activity/history view; daily files are stored under `logs/events/YYYY-MM-DD.log` inside each server directory.
 
 ## Running the bot with systemd
 
@@ -213,6 +213,7 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 | `MAX_MOD_UPLOAD_MB` | Maximum Telegram mod upload size |
 | `HOST_DISK_PATH` | Filesystem path shown in the `🖥 Host` disk-usage row; defaults to `/home` |
 | `AUTO_STOP_STATE_FILE` | Persistent auto-stop override state |
+| `AUTO_BACKUP_STATE_FILE` | Persistent scheduled backup state, default `auto_backup_state.json` |
 | `AUTO_STOP_DEFAULT_SECONDS` | Default empty-server timeout; `0` disables it |
 | `CONTROL_API_ENABLED` | Enable the optional external HTTP Control API |
 | `CONTROL_API_HOST`, `CONTROL_API_PORT` | Control API bind address and port |
@@ -224,7 +225,9 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 - Minecraft commands go through RCON; the bot does not expose a Linux shell.
 - Server startup uses an argv list and never `shell=True`.
 - RCON packet sizes are bounded before allocation.
-- Live backups pause saves, flush the world, archive it, then re-enable saves.
+- Manual live backups pause saves, flush the world, archive it, then re-enable saves.
+- Scheduled backups run only with Minecraft stopped, blocking a start request through Telegram/API until the archive finishes. Manual and automatic backups of the same server cannot run concurrently.
+- The new `backup.schedule` permission is granted to owner/admin by default, not to the operator role.
 - Telegram/RCON/log/file-name content is HTML-escaped before being rendered.
 - Mod uploads reject traversal names, enforce a size limit and refuse overwriting existing paths.
 - Secrets belong in `.env`; `.env` is ignored by Git and CI checks for common accidental secret patterns.
@@ -247,6 +250,7 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 │   └── auth.py
 ├── services/
 │   ├── auto_stop.py
+│   ├── auto_backup.py
 │   ├── backup.py
 │   ├── control_api.py
 │   ├── event_history.py
