@@ -13,7 +13,7 @@ from pathlib import Path
 
 _SAFE_SERVER_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _ALLOWED_FILES = {"users.json", "servers.json", ".env", "server.properties"}
-_STATE_BACKUP_NAMES = {"auto_stop_state.json", "auto_backup_state.json"}
+_OVERRIDE_BACKUP_NAMES = {"users.json", "servers.json", "auto_stop_state.json", "auto_backup_state.json"}
 
 
 def save_config_backup(
@@ -30,10 +30,10 @@ def save_config_backup(
     preventing name clashes across different Minecraft installations.
     """
     if backup_label is not None:
-        # Auto-task state files may use custom filenames in .env. Their
-        # backup labels are fixed and validated to avoid arbitrary paths.
-        if backup_label not in _STATE_BACKUP_NAMES or source_path.suffix != ".json":
-            raise ValueError("Unsupported auto-task state backup label")
+        # Configured JSON file paths may have custom names in .env; use
+        # fixed, validated backup labels without trusting arbitrary prefixes.
+        if backup_label not in _OVERRIDE_BACKUP_NAMES or source_path.suffix != ".json":
+            raise ValueError("Unsupported JSON config backup label")
         prefix = backup_label
     elif source_path.name == "server.properties":
         if not server_id or not _SAFE_SERVER_ID.fullmatch(server_id):
