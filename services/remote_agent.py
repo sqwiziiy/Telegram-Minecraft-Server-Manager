@@ -335,6 +335,74 @@ def configure_properties(config, content):
     return True
 
 
+def _safe_file(config, relative):
+    root = path(config["server_dir"]).resolve(strict=True)
+    item = Path(relative)
+    if item.is_absolute():
+        raise ValueError("path must be relative")
+    target = (root / item).resolve()
+    if target != root and root not in target.parents:
+        raise ValueError("path escapes server directory")
+    return root, target
+
+
+def _sensitive_file(target):
+    if ".git" in {part.casefold() for part in target.parts}:
+        return True
+    if target.name.casefold() in {".env", "credentials.json", "token.json", "accounts.json"}:
+        return True
+    return target.suffix.casefold() in {".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"}
+
+
+def browse_files(config, relative, recursive, limit):
+    root, folder = _safe_file(config, relative)
+    if not folder.is_dir():
+        raise FileNotFoundError("Remote directory does not exist")
+    entries = []
+    listing = folder.rglob("*") if recursive else folder.iterdir()
+    for entry in listing:
+        if len(entries) >= limit:
+            break
+        try:
+            candidate = entry.resolve()
+            if candidate != root and root not in candidate.parents:
+                continue
+            if not candidate.exists():
+                continue
+            stat = candidate.stat()
+            entries.append({
+                "path": str(candidate.relative_to(root)),
+                "name": candidate.name,
+                "type": "directory" if candidate.is_dir() else "file",
+                "size_bytes": stat.st_size if candidate.is_file() else None,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
+            })
+        except (OSError, ValueError):
+            continue
+    entries.sort(key=lambda value: (value["type"] != "directory", value["path"].casefold()))
+    return {"path": str(folder.relative_to(root)) or ".", "recursive": recursive,
+            "truncated": len(entries) >= limit, "entries": entries}
+
+
+def read_file(config, relative, max_bytes):
+    import gzip
+    root, target = _safe_file(config, relative)
+    if not target.is_file():
+        raise FileNotFoundError("Remote file does not exist")
+    if _sensitive_file(target):
+        raise PermissionError("Sensitive files are not available via Control API")
+    opener = gzip.open if target.suffix.lower() == ".gz" else open
+    with opener(target, "rb") as stream:
+        raw = stream.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError("File is too large to read")
+    if b"\x00" in raw[:8192]:
+        raise ValueError("Binary file is not readable via this endpoint")
+    return {"path": str(target.relative_to(root)),
+            "gzip_decompressed": target.suffix.lower() == ".gz",
+            "content": raw.decode("utf-8", "replace")}
+
+
 def dispatch(request):
     action = request["action"]
     config = request["config"]
@@ -377,6 +445,11 @@ def dispatch(request):
         return commit_mod(config, request["filename"], request["temporary_name"])
     if action == "backup":
         return make_backup(config, bool(request.get("automatic", False)))
+    if action == "list_files":
+        return browse_files(config, request.get("path", "."), bool(request.get("recursive", False)),
+                            max(1, min(1000, int(request.get("max_entries", 200)))))
+    if action == "read_file":
+        return read_file(config, request["path"], max(1024, min(4*1024*1024, int(request.get("max_bytes", 1048576)))))
     raise ValueError(f"Unsupported remote action: {action}")
 
 
