@@ -55,11 +55,16 @@ def pid_record(config):
 
 
 def rcon_available(config):
-    try:
-        with socket.create_connection(("127.0.0.1", int(config["rcon_port"])), 0.6):
-            return True
-    except OSError:
-        return False
+    # Also test Minecraft's game port: a JVM launched outside this manager
+    # with RCON disabled must not be mistaken for an offline world.
+    ports = (int(config["rcon_port"]), int(config.get("minecraft_port", 25565)))
+    for port in ports:
+        try:
+            with socket.create_connection(("127.0.0.1", port), 0.6):
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def get_status(config):
