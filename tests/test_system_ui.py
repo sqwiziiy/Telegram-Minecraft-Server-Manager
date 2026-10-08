@@ -9,7 +9,7 @@ os.environ.setdefault("ADMIN_IDS", "123456789")
 os.environ.setdefault("RCON_PASSWORD", "test-rcon-password")
 
 from handlers import system  # noqa: E402
-from keyboards.inline import back_to_server_keyboard, logs_keyboard  # noqa: E402
+from keyboards.inline import back_to_server_keyboard, logs_keyboard, auto_backup_keyboard, auto_stop_keyboard  # noqa: E402
 
 
 class SystemUiTests(unittest.TestCase):
@@ -24,6 +24,20 @@ class SystemUiTests(unittest.TestCase):
             callbacks,
             ["logs:storm-survival", "sv:storm-survival"],
         )
+
+    def test_auto_backup_keyboard_has_choices_and navigation(self) -> None:
+        keyboard = auto_backup_keyboard("storm", 86400)
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+        callbacks = {button.callback_data for button in buttons}
+        self.assertIn("autobackup_set:86400:storm", callbacks)
+        self.assertIn("autobackup_set:0:storm", callbacks)
+        self.assertIn("tasks:storm", callbacks)
+        self.assertTrue(next(
+            button.text.startswith("✅") for button in buttons
+            if button.callback_data == "autobackup_set:86400:storm"
+        ))
+        stop_buttons = [button.callback_data for row in auto_stop_keyboard("storm", 0).inline_keyboard for button in row]
+        self.assertIn("tasks:storm", stop_buttons)
 
     def test_backup_result_keyboard_returns_to_server(self) -> None:
         keyboard = back_to_server_keyboard("storm-survival")
