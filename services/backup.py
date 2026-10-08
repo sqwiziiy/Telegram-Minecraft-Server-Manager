@@ -8,6 +8,7 @@ from datetime import datetime
 from services.server_registry import ManagedServer, server_registry
 
 logger = logging.getLogger(__name__)
+_backup_locks: dict[str, asyncio.Lock] = {}
 
 
 async def _prepare_live_backup(server: ManagedServer) -> tuple[bool, str | None]:
@@ -34,13 +35,13 @@ async def _prepare_live_backup(server: ManagedServer) -> tuple[bool, str | None]
     return True, None
 
 
-async def create_backup(server: ManagedServer | None = None) -> str:
+async def _create_backup_unlocked(server: ManagedServer | None = None) -> str:
     """Create a consistent ZIP backup, coordinating with a live server through RCON."""
     server = server or server_registry.default()
     backup_dir = server.backup_dir
     world_dir = server.world_dir
     os.makedirs(backup_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     archive_stem = os.path.join(backup_dir, f"world_backup_{timestamp}")
     world_parent = os.path.dirname(os.path.abspath(world_dir))
     world_name = os.path.basename(os.path.abspath(world_dir))
@@ -75,3 +76,10 @@ async def create_backup(server: ManagedServer | None = None) -> str:
             save_on_result = await server.rcon("save-on")
             if save_on_result.startswith("❌"):
                 logger.error("Failed to re-enable Minecraft saves after backup: %s", save_on_result)
+
+
+async def create_backup(server: ManagedServer | None = None) -> str:
+    """Serialize manual and scheduled backups of the same world."""
+    server = server or server_registry.default()
+    async with _backup_locks.setdefault(server.server_id, asyncio.Lock()):
+        return await _create_backup_unlocked(server)
