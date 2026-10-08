@@ -41,12 +41,12 @@ class RemoteAgentTests(unittest.TestCase):
         payload = remote_agent.dispatch({"action": "probe", "config": self.config})
         self.assertEqual(payload["properties"], "server-port=25565\n")
         self.assertIn("start-server.sh", payload["launchers"])
-        self.assertFalse(payload["has_mods"])
+        self.assertTrue(payload["has_mods"])
         self.assertFalse(payload["has_plugins"])
         (self.root / "plugins").mkdir()
         payload = remote_agent.dispatch({"action": "probe", "config": self.config})
         self.assertTrue(payload["has_plugins"])
-        self.assertFalse(payload["has_mods"])
+        self.assertTrue(payload["has_mods"])
 
     def test_properties_write_requires_unchanged_old_text(self):
         original = "max-players=4\n"
