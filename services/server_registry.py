@@ -30,6 +30,7 @@ from config import (
 from services.rcon import send_rcon_command
 from services.server_process import ServerProcessManager, server_process_manager
 from services.remote_ssh import SSHSettings, SSHRemote, RemoteServerProcessManager
+from services.server_software import SOFTWARE_OPTIONS
 
 logger = logging.getLogger(__name__)
 _SERVER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -50,6 +51,7 @@ class ManagedServer:
     auto_stop_seconds: int = 0
     backup_retention_max_count: int = 0
     backup_retention_max_gb: float = 0.0
+    server_software: str = "mods"  # Legacy configs retain their Mods tab.
     ssh_remote: SSHRemote | None = None
 
     @property
@@ -233,6 +235,17 @@ class ServerRegistry:
                 )
 
             backup_retention_max_count, backup_retention_max_gb = self._retention_limits(raw, server_id)
+            server_software = str(raw.get("server_software", "mods")).strip().lower()
+            if server_software not in SOFTWARE_OPTIONS:
+                raise RuntimeError(
+                    f"Server {server_id!r} has unsupported server_software "
+                    f"{server_software!r}; expected vanilla, mods or plugins"
+                )
+            # The existing mods_dir attribute remains a generic addon directory
+            # for compatibility with the current Mod UI and upload handlers.
+            addon_key = "plugins_dir" if server_software == "plugins" else "mods_dir"
+            addon_folder = "plugins" if server_software == "plugins" else "mods"
+            addons_dir = self._path_value(raw, addon_key, server_dir / addon_folder)
 
             mode = str(raw.get("type", "local")).strip().lower()
             ssh_remote: SSHRemote | None = None
@@ -269,7 +282,7 @@ class ServerRegistry:
                         "minecraft_port": int(raw.get("minecraft_port", 25565)),
                         "rcon_password": rcon_password,
                         "minecraft_log_path": self._path_value(raw, "minecraft_log_path", server_dir / "logs" / "latest.log"),
-                        "mods_dir": self._path_value(raw, "mods_dir", server_dir / "mods"),
+                        "mods_dir": addons_dir,
                         "world_dir": self._path_value(raw, "world_dir", server_dir / "world"),
                         "backup_dir": self._path_value(raw, "backup_dir", server_dir / "backups"),
                         "backup_retention_max_count": backup_retention_max_count,
@@ -291,12 +304,13 @@ class ServerRegistry:
                     rcon_port=rcon_port,
                     rcon_password=rcon_password,
                     minecraft_log_path=self._path_value(raw, "minecraft_log_path", server_dir / "logs" / "latest.log"),
-                    mods_dir=self._path_value(raw, "mods_dir", server_dir / "mods"),
+                    mods_dir=addons_dir,
                     world_dir=self._path_value(raw, "world_dir", server_dir / "world"),
                     backup_dir=self._path_value(raw, "backup_dir", server_dir / "backups"),
                     auto_stop_seconds=auto_stop_seconds,
                     backup_retention_max_count=backup_retention_max_count,
                     backup_retention_max_gb=backup_retention_max_gb,
+                    server_software=server_software,
                     ssh_remote=ssh_remote,
                 )
             )
