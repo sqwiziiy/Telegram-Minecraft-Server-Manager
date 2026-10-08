@@ -354,7 +354,8 @@ def dispatch(request):
             except OSError:
                 return False
     if action == "configure_properties":
-        return configure_properties(config, request["content"])
+        expected_config = {**config, "expected_properties": request["expected_properties"]}
+        return configure_properties(expected_config, request["content"])
     if action == "status":
         return get_status(config)
     if action == "start":
