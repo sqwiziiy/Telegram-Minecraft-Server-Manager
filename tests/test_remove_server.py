@@ -44,8 +44,8 @@ class RemoveServerTests(unittest.TestCase):
         )
         (self.project / ".env").write_text(
             'BOT_TOKEN="keep-secret"\nDEFAULT_SERVER_ID="survival"\n'
-            'SURVIVAL_RCON_PASSWORD="local-pass"\n'
-            'REMOTE_RCON_PASSWORD="remote-pass"\n'
+            'SURVIVAL_RCON_PASSWORD="local"\n'
+            'REMOTE_RCON_PASSWORD="remote"\n'
             'EXTRA_KEY="untouched"\n', encoding="utf-8",
         )
         (self.project / "users.json").write_text(
@@ -105,7 +105,7 @@ class RemoveServerTests(unittest.TestCase):
         self.assertEqual(config["note"], "preserve me")
         text = (self.project / ".env").read_text()
         self.assertNotIn("REMOTE_RCON_PASSWORD=", text)
-        self.assertIn('SURVIVAL_RCON_PASSWORD="local-pass"', text)
+        self.assertIn('SURVIVAL_RCON_PASSWORD="local"', text)
         self.assertIn('DEFAULT_SERVER_ID="survival"', text)
         self.assertIn('EXTRA_KEY="untouched"', text)
         users = self.json_file("users.json")["users"]
@@ -168,7 +168,7 @@ class RemoveServerTests(unittest.TestCase):
         (self.project / "servers.json").write_text(json.dumps(servers), encoding="utf-8")
         self.assertTrue(self.invoke(["4", "1", "remote", "survival"]))
         content = (self.project / ".env").read_text()
-        self.assertIn('SURVIVAL_RCON_PASSWORD="local-pass"', content)
+        self.assertIn('SURVIVAL_RCON_PASSWORD="local"', content)
 
     def test_corrupted_state_aborts_all_config_changes(self):
         original = (self.project / "servers.json").read_bytes()
