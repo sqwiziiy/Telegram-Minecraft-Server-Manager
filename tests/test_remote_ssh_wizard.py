@@ -77,8 +77,10 @@ class SSHWizardTests(unittest.TestCase):
             self.assertEqual(added["ssh"]["user"], "mc")
             self.assertEqual(added["minecraft_port"], 25566)
             self.assertEqual(added["rcon_port"], 25576)
-            self.assertIn('TEST_SERVER_RCON_PASSWORD="existing"',
-                          (project / ".env").read_text(encoding="utf-8"))
+            self.assertIn(
+                added["rcon_password_env"] + '="existing"',
+                (project / ".env").read_text(encoding="utf-8"),
+            )
             self.assertEqual(len(updates), 1)
             self.assertEqual(updates[0]["expected_properties"], remote_properties)
             self.assertIn("enable-rcon=true", updates[0]["content"])
