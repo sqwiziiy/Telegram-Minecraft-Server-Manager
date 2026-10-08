@@ -6,3 +6,4 @@ nohup.out
 
 servers.json
 auto_stop_state.json
+auto_backup_state.json
