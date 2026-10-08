@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 _AUTO_RE = re.compile(r"^world_auto_backup_\d{8}_\d{6}_\d{6}\.zip$")
+_PARTIAL_RE = re.compile(r"^\.world_(?:auto_)?backup_\d{8}_\d{6}_\d{6}\.zip\.partial$")
 _MOD_RE = re.compile(r"^[A-Za-z0-9_\-. +\[\]()@#]+\.jar$")
 
 
@@ -351,10 +352,17 @@ def make_backup(config, automatic):
             raise FileNotFoundError(f"World directory not found: {world}")
         backups = path(config["backup_dir"])
         backups.mkdir(parents=True, exist_ok=True)
+        # Unfinished ZIPs must never appear as valid restore candidates.
+        # The remote operation lock ensures another bot is not writing a
+        # partial backup while we remove leftovers from interrupted runs.
+        for stale in backups.iterdir():
+            if _PARTIAL_RE.fullmatch(stale.name) and stale.is_file() and not stale.is_symlink():
+                stale.unlink()
         prefix = "world_auto_backup_" if automatic else "world_backup_"
         archive = backups / (prefix + datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".zip")
+        partial = backups / ("." + archive.name + ".partial")
         try:
-            with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zipf:
+            with zipfile.ZipFile(partial, "x", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zipf:
                 for root, directories, files in os.walk(world, followlinks=False):
                     directories[:] = [d for d in directories if not (Path(root) / d).is_symlink()]
                     for file in files:
@@ -362,8 +370,9 @@ def make_backup(config, automatic):
                         if item.is_symlink() or not item.is_file():
                             continue
                         zipf.write(item, arcname=str(item.relative_to(world.parent)))
+            os.replace(partial, archive)
         except BaseException:
-            archive.unlink(missing_ok=True)
+            partial.unlink(missing_ok=True)
             raise
         size = archive.stat().st_size
         removed = 0
