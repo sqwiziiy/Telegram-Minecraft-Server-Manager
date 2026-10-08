@@ -214,10 +214,25 @@ In modern mode, the `mcbot` user must have normal filesystem permissions for eve
 | `HOST_DISK_PATH` | Filesystem path shown in the `🖥 Host` disk-usage row; defaults to `/home` |
 | `AUTO_STOP_STATE_FILE` | Persistent auto-stop override state |
 | `AUTO_BACKUP_STATE_FILE` | Persistent scheduled backup state, default `auto_backup_state.json` |
+| `BACKUP_RETENTION_MAX_COUNT` | Maximum number of scheduled backup archives per server, `0` disables (default) |
+| `BACKUP_RETENTION_MAX_GB` | Maximum total scheduled backup archive size in GiB (1024³ bytes), `0` disables (default) |
 | `AUTO_STOP_DEFAULT_SECONDS` | Default empty-server timeout; `0` disables it |
 | `CONTROL_API_ENABLED` | Enable the optional external HTTP Control API |
 | `CONTROL_API_HOST`, `CONTROL_API_PORT` | Control API bind address and port |
 | `CONTROL_API_TOKEN` | Bearer token for external API clients |
+
+## Scheduled backup retention
+
+Automatic deletion is **disabled by default**. Configure optional limits in `.env`:
+
+```env
+BACKUP_RETENTION_MAX_COUNT=5
+BACKUP_RETENTION_MAX_GB=10
+```
+
+These values apply to each server backup directory. Override either value on a single server inside `servers.json` with `"backup_retention_max_count": 5` and/or `"backup_retention_max_gb": 10`. Explicit per-server values override the environment defaults; `0` disables an individual limit.
+
+After a **successful scheduled backup**, the manager removes the oldest matching automatic archives until **both enabled limits** are met. It only removes new `world_auto_backup_*.zip` archives with the exact timestamp format. Manually requested `world_backup_*.zip`, arbitrary files, symlinks, and indistinguishable older-version backups are never deleted. At least the newest scheduled archive is always preserved, even if that single ZIP exceeds the configured size cap; an over-limit warning is then logged. No cleanup runs at bot startup. Restart the bot to reload config edits.
 
 ## Security notes
 
