@@ -286,6 +286,75 @@ def build_entry(
     return result
 
 
+def edit_existing_software(
+    project_dir: Path, servers_path: Path,
+    config_original: bytes | None, document: dict | list, servers: list[dict],
+) -> bool:
+    """Change only the software profile of an already registered server."""
+    if not servers:
+        print("❌ Сначала добавь хотя бы один Minecraft-сервер.")
+        return False
+    print("\n🎮 Выбери сервер для изменения типа:")
+    for i, entry in enumerate(servers, 1):
+        label = entry.get("name") or entry.get("id")
+        software = entry.get("server_software", "mods")
+        print(f"  {i}. {label} ({entry.get('id')}) · сейчас {software}")
+    while True:
+        answer = input("Номер сервера (0 — назад): ").strip()
+        if answer == "0":
+            return False
+        if answer.isascii() and answer.isdecimal() and 1 <= int(answer) <= len(servers):
+            break
+        print("Введи номер из списка.")
+
+    selected = servers[int(answer) - 1]
+    directory = str(selected["server_dir"])
+    if selected.get("type", "local") == "ssh":
+        from services.remote_ssh import SSHRemote, SSHSettings
+        import asyncio
+
+        params = selected.get("ssh") or {}
+        try:
+            settings = SSHSettings(
+                host=params["host"], user=params["user"],
+                port=int(params.get("port", 22)),
+                key_file=params["key_file"], known_hosts=params["known_hosts"],
+            )
+            remote = SSHRemote(settings, {"server_dir": directory})
+            info = asyncio.run(remote.request("probe", timeout=40))
+        except Exception as exc:
+            raise ConfigurationError(f"Не удалось определить папки по SSH: {exc}") from exc
+        has_mods = bool(info.get("has_mods", False))
+        has_plugins = bool(info.get("has_plugins", False))
+    else:
+        root = Path(directory).expanduser().resolve()
+        if not root.is_dir():
+            raise ConfigurationError(f"Папка Minecraft не найдена: {root}")
+        has_mods = (root / "mods").is_dir()
+        has_plugins = (root / "plugins").is_dir()
+
+    software = choose_software(has_mods, has_plugins)
+    previous = str(selected.get("server_software", "mods"))
+    if software == previous:
+        print("ℹ️ Тип уже установлен, файл не изменён.")
+        return False
+    print(f"Изменить {selected.get('id')}: {previous} → {software}?")
+    if not ask_yes_no("Сохранить новое меню дополнений?", default=False):
+        print("Отменено.")
+        return False
+    selected["server_software"] = software
+    new_content = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    copies = apply_files(
+        [(servers_path, config_original, new_content, False)],
+        backup_dir=project_dir / "config_backups",
+    )
+    print(f"✅ Тип сервера обновлён: {SOFTWARE_NAMES[software]}")
+    for copy in copies:
+        print(f"   Резервная копия: {copy}")
+    print("Перезапусти бота: sudo systemctl restart telegram-minecraft-manager.service")
+    return True
+
+
 def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
     """Ask questions and apply changes only after a preview and confirmation."""
     env = read_simple_env(project_dir)
@@ -300,11 +369,14 @@ def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
     print("Подключение существующей установки Minecraft, без скачивания файлов.")
     print("\n  1. 💻 Локальный сервер (папка на этом ПК)")
     print("  2. 🌐 Удалённый Linux-сервер (SSH)")
+    print("  3. 🛠 Изменить тип уже подключённого сервера")
     while True:
         mode = ask_text("Режим", "1")
-        if mode in {"1", "2"}:
+        if mode in {"1", "2", "3"}:
             break
-        print("Выбери 1 или 2.")
+        print("Выбери 1, 2 или 3.")
+    if mode == "3":
+        return edit_existing_software(project_dir, servers_path, config_original, document, servers)
     if mode == "2":
         from scripts.manage_remote_servers import run_remote_wizard
 
