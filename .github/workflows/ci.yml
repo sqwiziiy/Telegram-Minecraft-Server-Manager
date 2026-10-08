@@ -27,4 +27,5 @@ jobs:
         run: |
           test ! -f .env
           ! grep -R --line-number -E 'BOT_TOKEN=[0-9]+:[A-Za-z0-9_-]{20,}|RCON_PASSWORD=[^[:space:]]{12,}' \
+            --binary-files=without-match --exclude-dir='__pycache__' --exclude='*.pyc' \
             --exclude='.env.example' --exclude-dir='.git' --exclude-dir='.github' .
