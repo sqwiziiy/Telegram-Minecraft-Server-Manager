@@ -108,7 +108,17 @@ The wizard asks for SSH host/user/port, private key, known_hosts, absolute remot
 
 All Telegram control paths support remote start/stop/restart, status, console, mods (SFTP), logs, auto-stop, manual and offline scheduled world backups with retention. Minecraft world ZIPs remain on the remote disk; event history is stored locally under `logs/remote_events/<server-id>`. Control API file browsing/reading also runs on the remote host. SSH failure is treated as connection unavailable, **not as a stopped server**.
 
-Use a dedicated non-root remote Linux user with access to the Minecraft folder and a restricted network path (Tailscale/WireGuard where appropriate). A remotely running server not launched through this manager may be detected via its ports but cannot be safely force-stopped if RCON is broken. The host-information UI refers to the bot host. Test with a disposable remote world before production.
+Use a dedicated non-root remote Linux user with access to the Minecraft folder and a restricted network path (Tailscale/WireGuard where appropriate). A remotely running server not launched through this manager may be detected via its ports, but the bot deliberately **refuses unmanaged stop/RCON/live backup commands**, even if a socket responds: a port is not proof of process identity. The host-information UI refers to the bot host. Test with a disposable remote world before production.
+
+
+
+**Resilience / recovery:** Remote start, stop, restart and backup operations use a host-side `flock` lock (under `server_dir`), preventing races across SSH sessions/bot instances and protecting offline backups from concurrent starts. Managed PID records include process start ticks and Linux boot ID, and are written before the startup wait to survive a short SSH disconnect. ZIP archives are published only after a complete `.partial` write; leftovers from interrupted attempts are cleaned on the next backup. If an SSH connection fails after a request was sent, its outcome is **uncertain**: check status/archives before retrying. A force-killed agent during a live backup may leave Minecraft saving disabled: verify/re-enable with `save-on` if that rare scenario occurs.
+
+Run `./venv/bin/python scripts/check_remote_servers.py --server test` (change server ID) as the bot's Unix account for a **read-only** SSH/host-key/status health check. The command does not print the RCON password or remote server.properties. To secure the key, prefer a dedicated non-root Minecraft Unix user with limited folder access, private-key mode `0600`, and OpenSSH `restrict`/`from="stable_source_ip"` authorized_keys options where applicable (not a forced `command=`, since the manager needs SSH exec and SFTP). Do not disable host-key checking.
+
+**Reboot test:** Reboot the bot host and verify SSH still authenticates with the service account's key. After rebooting the Minecraft host, the bot reconnects once SSH returns, but Minecraft itself is **not auto-started** by this integration.
+
+**About systemd `Found left-over process (java)`:** With `KillMode=process`, a local Java Minecraft child deliberately survives a restart of the Telegram service and remains in its old cgroup. The warning/peak memory display is expected in the current architecture. Do **not** switch to `KillMode=control-group` or `mixed`: this could kill the running world. Completely clean process/cgroup separation requires a separate Minecraft unit/scope and a planned migration; this PR does not migrate live Java processes.
 
 ### Add Minecraft servers interactively
 
