@@ -27,7 +27,11 @@ def server_home_keyboard(server: ManagedServer, user_id: int) -> InlineKeyboardM
     if access_control.can_server(user_id, sid, "events.view"):
         rows.append([InlineKeyboardButton(text="📋 События", callback_data=f"events:{sid}")])
     utility = []
-    for label, perm, action in (("💻 Консоль", "console.use", "console"), ("🧩 Моды", "mods.view", "mods"), ("📜 Логи", "logs.view", "logs"), ("💾 Бэкап", "backup.create", "backup")):
+    software = getattr(server, "server_software", "mods")
+    addon_label = "🔌 Плагины" if software == "plugins" else "🧩 Моды"
+    for label, perm, action in (("💻 Консоль", "console.use", "console"), (addon_label, "mods.view", "mods"), ("📜 Логи", "logs.view", "logs"), ("💾 Бэкап", "backup.create", "backup")):
+        if action == "mods" and software == "vanilla":
+            continue
         if access_control.can_server(user_id, sid, perm):
             utility.append(InlineKeyboardButton(text=label, callback_data=f"{action}:{sid}"))
     for i in range(0, len(utility), 2):
