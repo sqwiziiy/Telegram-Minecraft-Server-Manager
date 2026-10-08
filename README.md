@@ -94,6 +94,12 @@ STORM_SURVIVAL_RCON_PASSWORD=replace_me
 
 The two CLI editors write timestamped snapshots to the bot project's **`config_backups/`** folder: `users.json`, `servers.json`, `.env` and server-specific `server.properties` backups. Snapshots are private (`0600`) inside a private directory (`0700`) and ignored by Git. Old `.bak-*` files are not automatically moved. Minecraft world ZIP backups are unrelated and remain in each server's configured backup directory.
 
+### Minecraft server software profiles (Vanilla / Mods / Plugins)
+
+Use `server_software` in each `servers.json` entry (separate from `type`, which denotes local/ssh). Values: `vanilla` (no addon tab or stale addon callbacks), `mods` (Fabric, Forge, NeoForge, Quilt; `mods/` tab), `plugins` (Paper, Spigot, Purpur; `plugins/` tab). `mods_dir` and `plugins_dir` can override the corresponding directory. Existing entries without this key default to `mods` to maintain previous behavior.
+
+Both local and SSH wizards check for `mods/` and `plugins/` and suggest the type while allowing manual override; absence of both directories does **not** prove the server is Vanilla. To edit a previously registered server, run `python3 scripts/manage_servers.py` and select **3: Change existing server type**, then select the server and software profile. Existing policies, SSH credentials, launcher, ports and worlds remain unchanged. Configuration snapshots are saved to `config_backups/`.
+
 ### Remote Linux Minecraft servers over SSH (experimental branch)
 
 **Available for review in `feat/remote-ssh-servers`, not yet merged into main.** The `scripts/manage_servers.py` wizard now offers either local setup or remote Linux connection over SSH. Use SSH key authentication and a strictly verified host key from the bot service account's `known_hosts`. The remote machine needs OpenSSH, Python 3.10+, and a working Minecraft installation; it does **not** need a separate bot, permanent API daemon, or Python dependencies.
