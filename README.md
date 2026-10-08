@@ -90,6 +90,16 @@ DEFAULT_SERVER_ID=storm-survival
 STORM_SURVIVAL_RCON_PASSWORD=replace_me
 ```
 
+### Manage user access interactively
+
+Run `python3 scripts/manage_users.py` from anywhere. This standalone CLI uses only Python's standard library and reads the repository `.env` to locate `servers.json` and `users.json`. Select a Telegram user (or add a new Telegram ID), select a Minecraft server, then choose a preset: viewer, view+start, operator, admin, or toggle individual permissions. You can revoke access to one server, rename a user, or delete a user with confirmation.
+
+Changes preserve permissions on other servers, validate JSON, create timestamped `users.json.bak-*` copies, and refuse to overwrite externally edited or malformed access files. New Minecraft servers grant no access automatically. Restart the bot to reload the file:
+
+```bash
+sudo systemctl restart telegram-minecraft-manager.service
+```
+
 ### Granular access for other users
 
 Owners are configured in `.env` and always have full access:
