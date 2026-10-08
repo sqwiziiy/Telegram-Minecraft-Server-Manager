@@ -25,7 +25,7 @@ class SystemUiTests(unittest.TestCase):
             ["logs:storm-survival", "sv:storm-survival"],
         )
 
-    def test_auto_backup_keyboard_has_choices_and navigation(self) -> None:
+    def test_auto_backup_keyboard_has_choices_and_navigation(self) -> None:
         keyboard = auto_backup_keyboard("storm", 86400)
         buttons = [button for row in keyboard.inline_keyboard for button in row]
         callbacks = {button.callback_data for button in buttons}
