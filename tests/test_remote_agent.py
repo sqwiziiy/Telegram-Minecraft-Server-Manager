@@ -204,7 +204,8 @@ class RemoteAgentTests(unittest.TestCase):
 
         def during_wait(_seconds):
             record = json.loads(pid_file.read_text(encoding="utf-8"))
-            self.assertEqual(record, {"pid": 4242, "start_ticks": 5678})
+            self.assertEqual(record, {"pid": 4242, "start_ticks": 5678,
+                                      "boot_id": remote_agent.boot_id()})
             self.assertEqual(pid_file.stat().st_mode & 0o777, 0o600)
 
         with (
@@ -214,6 +215,31 @@ class RemoteAgentTests(unittest.TestCase):
             patch.object(remote_agent.time, "sleep", side_effect=during_wait),
         ):
             self.assertEqual(remote_agent.launch(self.config), "started")
+
+    def test_stale_pid_file_after_host_reboot_is_not_trusted(self):
+        Path(self.config["pid_file"]).write_text(
+            json.dumps({"pid": 1234, "start_ticks": 4567, "boot_id": "previous-boot"})
+        )
+        with (
+            patch.object(remote_agent, "boot_id", return_value="current-boot"),
+            patch.object(remote_agent, "process_alive", return_value=True) as alive,
+        ):
+            self.assertIsNone(remote_agent.pid_record(self.config))
+        alive.assert_not_called()
+
+    def test_unmanaged_server_cannot_receive_rcon_or_live_backup(self):
+        state = {"running": True, "pid": None}
+        with (
+            patch.object(remote_agent, "get_status", return_value=state),
+            patch.object(remote_agent, "rcon") as rcon,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unrecognized"):
+                remote_agent.dispatch({"action": "rcon", "config": self.config,
+                                       "command": "stop"})
+            with self.assertRaisesRegex(RuntimeError, "managed PID missing"):
+                remote_agent.dispatch({"action": "backup", "config": self.config,
+                                       "automatic": False})
+        rcon.assert_not_called()
 
     def test_unsafe_process_group_is_never_signaled(self):
         with (
