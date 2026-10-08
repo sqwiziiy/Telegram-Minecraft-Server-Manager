@@ -1,6 +1,10 @@
 """Tests for the standalone SSH-side agent (no SSH server required)."""
 import os
 import socket
+import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import unittest
 import zipfile
@@ -138,6 +142,93 @@ class RemoteAgentTests(unittest.TestCase):
                 state = remote_agent.get_status(self.config)
             self.assertTrue(state["running"])
             self.assertIsNone(state["pid"])
+
+
+    def test_concurrent_requests_share_remote_host_lock(self):
+        """Independent SSH agent requests must not overlap on the target host."""
+        held = 0
+        peak = 0
+        counter_lock = threading.Lock()
+
+        def launch_once(_config):
+            nonlocal held, peak
+            with counter_lock:
+                held += 1
+                peak = max(peak, held)
+            time.sleep(0.06)
+            with counter_lock:
+                held -= 1
+            return "started"
+
+        with patch.object(remote_agent, "launch", side_effect=launch_once):
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                responses = list(pool.map(
+                    lambda _: remote_agent.dispatch({"action": "start", "config": self.config}),
+                    range(5),
+                ))
+        self.assertEqual(responses, ["started"] * 5)
+        self.assertEqual(peak, 1, "Remote lock must serialize separate dispatches")
+
+    def test_unmanaged_listener_can_never_receive_stop_command(self):
+        with (
+            patch.object(remote_agent, "get_status", return_value={
+                "running": True, "pid": None, "uptime_seconds": 0, "memory_mb": 0,
+            }),
+            patch.object(remote_agent, "pid_record", return_value=None),
+            patch.object(remote_agent, "rcon") as rcon,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Refusing to stop"):
+                remote_agent.dispatch({"action": "stop", "config": self.config})
+        rcon.assert_not_called()
+
+    def test_restart_refuses_to_spawn_second_instance(self):
+        with (
+            patch.object(remote_agent, "terminate", return_value="stopped"),
+            patch.object(remote_agent, "get_status", return_value={"running": True}),
+            patch.object(remote_agent, "launch") as launch,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "refusing a second start"):
+                remote_agent.dispatch({"action": "restart", "config": self.config})
+        launch.assert_not_called()
+
+    def test_pid_record_written_before_startup_wait(self):
+        script = self.root / "start-server.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        pid_file = Path(self.config["pid_file"])
+
+        class DummyChild:
+            pid = 4242
+            returncode = None
+            def poll(self):
+                return None
+
+        def during_wait(_seconds):
+            record = json.loads(pid_file.read_text(encoding="utf-8"))
+            self.assertEqual(record, {"pid": 4242, "start_ticks": 5678})
+            self.assertEqual(pid_file.stat().st_mode & 0o777, 0o600)
+
+        with (
+            patch.object(remote_agent, "get_status", return_value={"running": False}),
+            patch.object(remote_agent.subprocess, "Popen", return_value=DummyChild()),
+            patch.object(remote_agent, "ticks_for", return_value=5678),
+            patch.object(remote_agent.time, "sleep", side_effect=during_wait),
+        ):
+            self.assertEqual(remote_agent.launch(self.config), "started")
+
+    def test_unsafe_process_group_is_never_signaled(self):
+        with (
+            patch.object(remote_agent, "get_status", return_value={"running": True, "pid": 4242}),
+            patch.object(remote_agent, "pid_record", return_value=(4242, 777)),
+            patch.object(remote_agent, "rcon", return_value="❌ RCON недоступен"),
+            patch.object(remote_agent, "process_alive", return_value=True),
+            patch.object(remote_agent.time, "monotonic", side_effect=range(0, 1000, 100)),
+            patch.object(remote_agent.time, "sleep"),
+            patch.object(remote_agent.os, "getpgid", return_value=1),
+            patch.object(remote_agent.os, "killpg") as kill,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "refusing to signal"):
+                remote_agent.terminate(self.config)
+        kill.assert_not_called()
 
 
 if __name__ == "__main__":
