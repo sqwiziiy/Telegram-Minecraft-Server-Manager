@@ -187,6 +187,14 @@ def terminate(config):
             if not process_alive(pid, started):
                 return "stopped"
             time.sleep(0.5)
+    if answer.startswith("❌"):
+        # RCON could close after receiving 'stop'. Give Minecraft a chance
+        # to finish saving before falling back to operating-system signals.
+        deadline = time.monotonic() + min(timeout, 8.0)
+        while time.monotonic() < deadline:
+            if not process_alive(pid, started):
+                return "stopped"
+            time.sleep(0.5)
     for sig, delay in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
         if not process_alive(pid, started):
             return "stopped"
