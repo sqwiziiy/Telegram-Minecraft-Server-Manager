@@ -134,12 +134,14 @@ class AccessEditorTests(unittest.TestCase):
                 "name": "Friend", "servers": {"test": {
                     "role": "viewer", "allow": [], "deny": [],
                 }},
-            }}}, original)
+            }}}, original, backup_dir=Path(tmp) / "config_backups")
             self.assertIsNotNone(backup)
             self.assertEqual(backup.read_bytes(), original)
             data, _ = load_users(path)
             self.assertIn("test", data["users"]["1"]["servers"])
-            self.assertEqual(len(list(Path(tmp).glob("users.json.bak-*"))), 1)
+            self.assertEqual(len(list((Path(tmp) / "config_backups").glob("users.json.bak-*"))), 1)
+            self.assertFalse(list(Path(tmp).glob("users.json.bak-*")))
+            self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
 
     def test_atomic_save_rejects_external_edits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,9 +150,9 @@ class AccessEditorTests(unittest.TestCase):
             path.write_bytes(original)
             path.write_bytes(b'{"users":{"1":{}}}')
             with self.assertRaisesRegex(ConfigurationError, "изменён другой программой"):
-                atomic_save(path, {"users": {}}, original)
+                atomic_save(path, {"users": {}}, original, backup_dir=Path(tmp) / "config_backups")
             self.assertEqual(path.read_bytes(), b'{"users":{"1":{}}}')
-            self.assertEqual(len(list(Path(tmp).glob("users.json.bak-*"))), 0)
+            self.assertFalse((Path(tmp) / "config_backups").exists())
 
     def test_interactive_add_and_edit_across_servers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +161,7 @@ class AccessEditorTests(unittest.TestCase):
                 users_path,
                 [("storm-survival", "Storm"), ("test-server", "Test")],
                 "storm-survival",
+                backup_dir=Path(tmp) / "config_backups",
             )
             with (
                 patch("builtins.input", side_effect=[
@@ -172,7 +175,8 @@ class AccessEditorTests(unittest.TestCase):
             user = data["users"]["7472435566"]
             self.assertEqual(user["servers"]["storm-survival"]["role"], "custom")
             self.assertEqual(user["servers"]["test-server"]["role"], "operator")
-            self.assertEqual(len(list(Path(tmp).glob("users.json.bak-*"))), 1)
+            self.assertEqual(len(list((Path(tmp) / "config_backups").glob("users.json.bak-*"))), 1)
+            self.assertFalse(list(Path(tmp).glob("users.json.bak-*")))
 
     def test_custom_permission_toggle(self) -> None:
         existing = {"role": "viewer", "allow": [], "deny": []}
