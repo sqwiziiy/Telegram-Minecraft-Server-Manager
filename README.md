@@ -90,6 +90,12 @@ DEFAULT_SERVER_ID=storm-survival
 STORM_SURVIVAL_RCON_PASSWORD=replace_me
 ```
 
+### Add Minecraft servers interactively
+
+Use `python3 scripts/manage_servers.py` to register a **pre-installed** Minecraft server without hand-editing `servers.json`. Enter its installation directory, ID, display name, launcher command and game/RCON ports. The CLI checks for port conflicts, offers free defaults, reads or generates the RCON password without displaying it, and previews changes before confirmation.
+
+It updates `servers.json`, the new server's `server.properties` and the bot's private `.env` with backups and atomic replacements (attempting rollback on failure). Existing server entries and unrelated Minecraft properties are preserved; new servers start with auto-stop and backup deletion disabled. Dependencies, EULA acceptance, port forwarding and any server installation are **not** managed by this script. After saving, restart the bot and grant friends access separately via `python3 scripts/manage_users.py`.
+
 ### Manage user access interactively
 
 Run `python3 scripts/manage_users.py` from anywhere. This standalone CLI uses only Python's standard library and reads the repository `.env` to locate `servers.json` and `users.json`. Select a Telegram user (or add a new Telegram ID), select a Minecraft server, then choose a preset: viewer, view+start, operator, admin, or toggle individual permissions. You can revoke access to one server, rename a user, or delete a user with confirmation.
