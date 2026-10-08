@@ -151,7 +151,7 @@ class AutoBackupManager:
             # A start request through Telegram/API must wait for the backup.
             # Recheck the process while holding the lock to avoid a TOCTOU race.
             ran, result = await server.manager.run_if_stopped(
-                lambda: create_backup(server)
+                lambda: create_backup(server, automatic=True)
             )
             if not ran:
                 if not schedule.pending:
