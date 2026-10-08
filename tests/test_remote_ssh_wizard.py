@@ -11,7 +11,7 @@ os.environ.setdefault("BOT_TOKEN", "123456:test-token")
 os.environ.setdefault("ADMIN_IDS", "123456789")
 
 from scripts.manage_servers import run_wizard  # noqa: E402
-from services.remote_ssh import RemoteServerProcessManager, SSHSettings  # noqa: E402
+from services.remote_ssh import RemoteServerProcessManager, SSHSettings, SSHRemote  # noqa: E402
 
 
 class SSHWizardTests(unittest.TestCase):
@@ -148,6 +148,45 @@ class RemoteManagerTests(unittest.IsolatedAsyncioTestCase):
         manager = RemoteServerProcessManager(fake)
         with self.assertRaises(ConnectionError):
             await manager.run_if_stopped(AsyncMock())
+
+
+class RemoteTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_auth_error_explains_key_and_remote_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key = Path(tmp) / "sshkey"
+            known = Path(tmp) / "known_hosts"
+            key.write_text("dummy", encoding="utf-8")
+            known.write_text("dummy", encoding="utf-8")
+            remote = SSHRemote(
+                SSHSettings("remote.example", "minecraft", key_file=str(key), known_hosts=str(known)),
+                {"server_dir": "/srv/minecraft"},
+            )
+            with patch("services.remote_ssh.asyncssh.connect", side_effect=OSError("connection refused")):
+                with self.assertRaisesRegex(ConnectionError, "remote.example"):
+                    await remote.request("status")
+
+    async def test_disconnect_during_start_warns_of_uncertain_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key = Path(tmp) / "sshkey"
+            known = Path(tmp) / "known_hosts"
+            key.write_text("dummy", encoding="utf-8")
+            known.write_text("dummy", encoding="utf-8")
+            remote = SSHRemote(
+                SSHSettings("remote.example", "minecraft", key_file=str(key), known_hosts=str(known)),
+                {"server_dir": "/srv/minecraft"},
+            )
+
+            class BrokenSession:
+                async def __aenter__(self):
+                    return self
+                async def __aexit__(self, *_):
+                    return False
+                async def run(self, *args, **kwargs):
+                    raise OSError("SSH dropped")
+
+            with patch.object(remote, "_connect", new=AsyncMock(return_value=BrokenSession())):
+                with self.assertRaisesRegex(ConnectionError, "refresh server status"):
+                    await remote.request("start")
 
 
 if __name__ == "__main__":
