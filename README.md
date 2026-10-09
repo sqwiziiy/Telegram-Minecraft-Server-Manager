@@ -100,6 +100,14 @@ Use `server_software` in each `servers.json` entry (separate from `type`, which 
 
 Both local and SSH wizards check for `mods/` and `plugins/` and suggest the type while allowing manual override; absence of both directories does **not** prove the server is Vanilla. To edit a previously registered server, run `python3 scripts/manage_servers.py` and select **3: Change existing server type**, then select the server and software profile. Existing policies, SSH credentials, launcher, ports and worlds remain unchanged. Configuration snapshots are saved to `config_backups/`.
 
+### Unregister a server safely (v2.0.1)
+
+Run `python3 scripts/manage_servers.py` and choose **4 — Unregister server from bot**. Supports local and remote SSH entries. It deletes only the selected entry from `servers.json`, its unshared RCON environment assignment, its per-server access entries and persisted auto-stop/auto-backup schedule data, with private `config_backups/` snapshots and rollback if a write fails.
+
+If removing the default server, select a replacement `DEFAULT_SERVER_ID`. Legacy user roles tied to the deleted default will **not** silently gain access to the new default server. Removing the last server is refused to avoid activating the old single-server fallback. Deletion requires typing the exact server ID.
+
+**Stop only the bot service before editing persisted task data** (`sudo systemctl stop telegram-minecraft-manager.service`), then restart it after removing the entry. With `KillMode=process` local Java servers continue to run. The wizard does not touch any Minecraft installation, world, plugins, mods, ZIP backups, logs, remote host or SSH key. A running removed server is not stopped by the wizard; manage it separately if required.
+
 ### Remote Linux Minecraft servers over SSH (v2.0.0)
 
 **Available in v2.0.0 and later.** The `scripts/manage_servers.py` wizard offers either local setup or remote Linux connection over SSH. Use SSH key authentication and a strictly verified host key from the bot service account's `known_hosts`. The remote machine needs OpenSSH, Python 3.10+, and a working Minecraft installation; it does **not** need a separate bot, permanent API daemon, or Python dependencies.

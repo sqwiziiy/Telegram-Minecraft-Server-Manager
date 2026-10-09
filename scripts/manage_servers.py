@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive Minecraft server registration without hand-editing JSON.
+"""Interactive Minecraft server registration and removal without hand-editing JSON.
 
 Only registers an EXISTING Minecraft installation; does not install Minecraft.
 Updates servers.json, server.properties and the bot's private .env together.
@@ -204,6 +204,7 @@ def apply_files(
     backup_dir: Path | None = None,
     *,
     server_id: str | None = None,
+    backup_labels: dict[Path, str] | None = None,
 ) -> list[Path]:
     """Check originals, create backups and atomically replace staged files.
 
@@ -221,7 +222,10 @@ def apply_files(
         if old is None:
             continue
         try:
-            backup = save_config_backup(path, old, backup_dir, server_id=server_id)
+            backup = save_config_backup(
+                path, old, backup_dir, server_id=server_id,
+                backup_label=(backup_labels or {}).get(path),
+            )
         except (OSError, ValueError) as exc:
             raise ConfigurationError(f"Не удалось сохранить резервную копию {path}: {exc}") from exc
         backups.append(backup)
@@ -373,11 +377,17 @@ def run_wizard(project_dir: Path = PROJECT_DIR) -> bool:
     print("\n  1. 💻 Локальный сервер (папка на этом ПК)")
     print("  2. 🌐 Удалённый Linux-сервер (SSH)")
     print("  3. 🛠 Изменить тип уже подключённого сервера")
+    print("  4. 🗑 Отключить сервер от бота (без удаления мира)")
     while True:
         mode = ask_text("Режим", "1")
-        if mode in {"1", "2", "3"}:
+        if mode in {"1", "2", "3", "4"}:
             break
-        print("Выбери 1, 2 или 3.")
+        print("Выбери 1, 2, 3 или 4.")
+    if mode == "4":
+        from scripts.remove_server import remove_registered_server
+        return remove_registered_server(
+            project_dir, servers_path, config_original, document, servers, env
+        )
     if mode == "3":
         return edit_existing_software(project_dir, servers_path, config_original, document, servers)
     if mode == "2":

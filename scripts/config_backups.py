@@ -13,6 +13,7 @@ from pathlib import Path
 
 _SAFE_SERVER_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _ALLOWED_FILES = {"users.json", "servers.json", ".env", "server.properties"}
+_OVERRIDE_BACKUP_NAMES = {"users.json", "servers.json", "auto_stop_state.json", "auto_backup_state.json"}
 
 
 def save_config_backup(
@@ -21,20 +22,27 @@ def save_config_backup(
     backup_dir: Path,
     *,
     server_id: str | None = None,
+    backup_label: str | None = None,
 ) -> Path:
     """Write an exclusive 0600 backup from the validated pre-edit snapshot.
 
     A Minecraft server ID is part of the name for server.properties backups,
     preventing name clashes across different Minecraft installations.
     """
-    if source_path.name not in _ALLOWED_FILES:
-        raise ValueError(f"Unsupported config backup source: {source_path.name}")
-    if source_path.name == "server.properties":
+    if backup_label is not None:
+        # Configured JSON file paths may have custom names in .env; use
+        # fixed, validated backup labels without trusting arbitrary prefixes.
+        if backup_label not in _OVERRIDE_BACKUP_NAMES or source_path.suffix != ".json":
+            raise ValueError("Unsupported JSON config backup label")
+        prefix = backup_label
+    elif source_path.name == "server.properties":
         if not server_id or not _SAFE_SERVER_ID.fullmatch(server_id):
             raise ValueError("server_id is required to back up server.properties")
         prefix = f"{server_id}-server.properties"
-    else:
+    elif source_path.name in _ALLOWED_FILES:
         prefix = source_path.name
+    else:
+        raise ValueError(f"Unsupported config backup source: {source_path.name}")
 
     if backup_dir.is_symlink():
         raise OSError(f"Config backup directory must not be a symlink: {backup_dir}")
