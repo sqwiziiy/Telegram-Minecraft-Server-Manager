@@ -439,21 +439,50 @@ def make_backup(config, automatic):
                 print("WARNING: Minecraft saves could not be re-enabled", file=sys.stderr)
 
 
+def safe_zip_filename(filename):
+    return (
+        isinstance(filename, str)
+        and filename.lower().endswith(".zip")
+        and not filename.startswith(".")
+        and len(filename.encode("utf-8")) <= 255
+        and not any(char in filename for char in ("/", "\\", "\x00", "\n", "\r"))
+        and all(ord(char) >= 32 for char in filename)
+    )
+
+
 def archive_metadata(entry):
-    match = _CATALOG_RE.fullmatch(entry.name)
-    if not match or entry.is_symlink() or not entry.is_file():
+    if not safe_zip_filename(entry.name) or entry.is_symlink() or not entry.is_file():
         return None
     try:
-        stamp = datetime.strptime(match.group("stamp"), "%Y%m%d_%H%M%S_%f")
-        size = entry.stat().st_size
-    except (OSError, ValueError):
+        info = entry.stat()
+        match = _CATALOG_RE.fullmatch(entry.name)
+        if match:
+            stamp = datetime.strptime(match.group("stamp"), "%Y%m%d_%H%M%S_%f")
+            labels = {"backup": "Ручной", "auto_backup": "Автоматический", "pre_restore": "Защитный"}
+            archive_type = labels[match.group("kind")]
+            known_format = True
+        else:
+            stamp = datetime.fromtimestamp(info.st_mtime)
+            lower = entry.name.lower()
+            if lower.startswith("world_auto_backup_"):
+                archive_type = "Автоматический (старый формат)"
+            elif lower.startswith("world_pre_restore_"):
+                archive_type = "Защитный (старый формат)"
+            elif lower.startswith("world_backup_"):
+                archive_type = "Ручной (старый формат)"
+            else:
+                archive_type = "Другой ZIP (требует проверки)"
+            known_format = False
+    except (OSError, ValueError, OverflowError):
         return None
-    labels = {"backup": "Ручной", "auto_backup": "Автоматический", "pre_restore": "Защитный"}
     return {
-        "name": entry.name, "type": labels[match.group("kind")],
+        "name": entry.name,
+        "type": archive_type,
+        "known_format": known_format,
         "created": stamp.strftime("%d.%m.%Y %H:%M:%S"),
         "timestamp": stamp.strftime("%Y%m%d_%H%M%S_%f"),
-        "size_bytes": size, "size_mb": round(size / 1048576, 1),
+        "size_bytes": info.st_size,
+        "size_mb": round(info.st_size / 1048576, 1),
     }
 
 
@@ -467,7 +496,7 @@ def list_backups(config):
 
 
 def backup_info(config, filename):
-    if not isinstance(filename, str) or not _CATALOG_RE.fullmatch(filename):
+    if not safe_zip_filename(filename):
         raise ValueError("Invalid backup filename")
     entry = path(config["backup_dir"]) / filename
     meta = archive_metadata(entry)
