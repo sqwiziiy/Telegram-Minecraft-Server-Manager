@@ -1,3 +1,5 @@
+import hashlib
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.access_control import access_control
@@ -64,20 +66,40 @@ def console_exit_keyboard(server_id: str) -> InlineKeyboardMarkup:
     ]])
 
 
-def mods_list_keyboard(count: int, user_id: int, server_id: str | None = None) -> InlineKeyboardMarkup | None:
+def addon_token(filename: str) -> str:
+    # Compact fingerprint prevents stale numeric callbacks from toggling
+    # a different file after the list order changes.
+    return hashlib.blake2s(filename.encode("utf-8"), digest_size=5).hexdigest()
+
+
+def mods_list_keyboard(files: list[str], user_id: int, server_id: str | None = None) -> InlineKeyboardMarkup | None:
     if not server_id:
         return None
     rows: list[list[InlineKeyboardButton]] = []
-    if count > 0 and access_control.can_server(user_id, server_id, "mods.delete"):
-        buttons = [InlineKeyboardButton(text=f"🗑 {i + 1}", callback_data=f"dm:{server_id}:{i}") for i in range(count)]
+    allowed = access_control.can_server(user_id, server_id, "mods.toggle") or access_control.can_server(
+        user_id, server_id, "mods.delete"  # backward-compatible older roles
+    )
+    if files and allowed:
+        buttons = [
+            InlineKeyboardButton(
+                text=("✅" if filename.endswith(".jar.disabled") else "🚫") + f" {index + 1}",
+                callback_data=f"mt:{server_id}:{index}:{addon_token(filename)}",
+            )
+            for index, filename in enumerate(files)
+        ]
         rows.extend(buttons[i:i + 5] for i in range(0, len(buttons), 5))
+    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"mods:{server_id}")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def mod_delete_confirm_keyboard(server_id: str, idx: int) -> InlineKeyboardMarkup:
+def mod_toggle_confirm_keyboard(server_id: str, idx: int, filename: str) -> InlineKeyboardMarkup:
+    verb = "включить" if filename.endswith(".jar.disabled") else "отключить"
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"dm_ok:{server_id}:{idx}"),
+        InlineKeyboardButton(
+            text=f"✅ Да, {verb}",
+            callback_data=f"mt_ok:{server_id}:{idx}:{addon_token(filename)}",
+        ),
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"mods:{server_id}"),
     ]])
 
