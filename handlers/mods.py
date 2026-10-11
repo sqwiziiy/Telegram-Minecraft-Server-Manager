@@ -9,10 +9,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Document, Message
 
 from config import MAX_MOD_UPLOAD_MB
-from keyboards.inline import mods_list_keyboard, mod_delete_confirm_keyboard
+from keyboards.inline import addon_token, mods_list_keyboard, mod_toggle_confirm_keyboard
 from middlewares.auth import deny_access
 from services.access_control import access_control
-from services.telegram_context import resolve_server
+from services.addons import is_addon_name, is_disabled, list_addons, toggle_addon
+from services.telegram_context import resolve_server, safe_edit_text
 
 router = Router()
 
@@ -33,17 +34,16 @@ def _safe_upload_name(original: str) -> str | None:
     return safe_name
 
 
-def _files(mods_dir: str) -> list[str] | None:
-    try:
-        return sorted(f for f in os.listdir(mods_dir) if f.lower().endswith(".jar") and os.path.isfile(os.path.join(mods_dir, f)))
-    except FileNotFoundError:
-        return None
-
-
 async def _files_for(server) -> list[str] | None:
     if server.ssh_remote is not None:
         return await server.ssh_remote.request("list_mods")
-    return _files(server.mods_dir)
+    return list_addons(server.mods_dir)
+
+
+def _can_toggle(user_id: int, server_id: str) -> bool:
+    return access_control.can_server(user_id, server_id, "mods.toggle") or access_control.can_server(
+        user_id, server_id, "mods.delete"  # legacy permission, no longer deletes files
+    )
 
 
 def _addon_software(server) -> str:
@@ -58,7 +58,14 @@ def _addon_labels(server) -> tuple[str, str, str]:
 
 def _text(files: list[str], user_id: int, server_id: str, *, software: str = "mods") -> str:
     title, plural = ("🔌 <b>Плагины</b>", "плагинов") if software == "plugins" else ("🧩 <b>Моды</b>", "модов")
-    text = title + "\n\n" + ("\n".join(f"{i + 1}. <code>{html.escape(f)}</code>" for i, f in enumerate(files)) if files else f"Папка {plural} пуста.")
+    lines = [
+        f"{'🚫' if is_disabled(name) else '✅'} {idx}. <code>{html.escape(name)}</code>"
+        for idx, name in enumerate(files, start=1)
+    ]
+    text = title + "\n\n" + ("\n".join(lines) if lines else f"Папка {plural} пуста.")
+    if _can_toggle(user_id, server_id) and files:
+        text += "\n\n🚫 N — отключить, ✅ N — включить (нажмите номер ниже)."
+        text += "\nИзменения применяются после следующего запуска Minecraft."
     if access_control.can_server(user_id, server_id, "mods.upload"):
         text += "\n\nОтправьте .jar для загрузки."
     return text
@@ -89,101 +96,110 @@ async def list_mods(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.edit_text(
             f"❌ Папка {_addon_labels(server)[1]} не найдена:\n<code>{html.escape(server.mods_dir)}</code>",
             parse_mode="HTML",
-            reply_markup=mods_list_keyboard(0, callback.from_user.id, server_id),
+            reply_markup=mods_list_keyboard([], callback.from_user.id, server_id),
         )
         await callback.answer()
         return
-    await callback.message.edit_text(_text(files, callback.from_user.id, server_id, software=_addon_software(server)), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, server_id))
+    await safe_edit_text(callback.message, _text(files, callback.from_user.id, server_id, software=_addon_software(server)), parse_mode="HTML", reply_markup=mods_list_keyboard(files, callback.from_user.id, server_id))
     await callback.answer()
 
 
-def _parts(data: str, prefix: str) -> tuple[str, int] | None:
+def _toggle_parts(data: str, prefix: str) -> tuple[str, int, str] | None:
+    if not isinstance(data, str) or not data.startswith(prefix):
+        return None
     try:
-        sid, raw_idx = data.removeprefix(prefix).split(":", 1)
+        sid, raw_idx, token = data[len(prefix):].split(":", 2)
         idx = int(raw_idx)
-        return (sid, idx) if idx >= 0 else None
-    except (ValueError, AttributeError):
+        if not sid or not 0 <= idx < 100000 or not re.fullmatch(r"[0-9a-f]{10}", token):
+            return None
+        return sid, idx, token
+    except ValueError:
         return None
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("dm:"))
-async def ask_delete(callback: CallbackQuery) -> None:
-    parsed = _parts(callback.data, "dm:")
-    if not parsed:
-        await deny_access(callback)
+async def _selected_addon(server, idx: int, token: str) -> str | None:
+    files = await _files_for(server)
+    if not files or idx >= len(files):
+        return None
+    filename = files[idx]
+    return filename if is_addon_name(filename) and addon_token(filename) == token else None
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("mt:"))
+async def ask_toggle(callback: CallbackQuery) -> None:
+    parts = _toggle_parts(callback.data, "mt:")
+    if parts is None:
+        await callback.answer("Некорректный выбор.", show_alert=True)
         return
-    sid, idx = parsed
+    sid, idx, token = parts
     server = resolve_server(sid)
     if server is None:
         await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
         return
-    if _addon_software(server) == "vanilla":
-        await callback.answer("🍃 Vanilla: управление дополнениями отключено.", show_alert=True)
-        return
-    if not access_control.can_server(callback.from_user.id, sid, "mods.delete"):
+    if _addon_software(server) == "vanilla" or not _can_toggle(callback.from_user.id, sid):
         await deny_access(callback)
         return
     try:
-        files = await _files_for(server)
+        filename = await _selected_addon(server, idx, token)
+        if filename is None:
+            await callback.answer("Список изменился. Обновите его.", show_alert=True)
+            return
+        if (await server.manager.status()).running:
+            await callback.answer("⏹ Сначала остановите Minecraft.", show_alert=True)
+            return
     except Exception as exc:  # noqa: BLE001
-        await callback.answer(f"SSH: {str(exc)[:120]}", show_alert=True)
+        await callback.answer(f"❌ Нет доступа к серверу: {str(exc)[:110]}", show_alert=True)
         return
-    if files is None or idx >= len(files):
-        await callback.answer("Список модов изменился.", show_alert=True)
-        return
-    await callback.message.edit_text(f"🗑 Удалить {_addon_labels(server)[2]} <code>{html.escape(files[idx])}</code>?", parse_mode="HTML", reply_markup=mod_delete_confirm_keyboard(sid, idx))
+    verb = "Включить" if is_disabled(filename) else "Отключить"
+    await safe_edit_text(
+        callback.message,
+        f"🧩 <b>{verb} {_addon_labels(server)[2]}?</b>\n"
+        f"<code>{html.escape(filename)}</code>\n\n"
+        "Файл не удаляется. Сервер должен быть выключен.",
+        parse_mode="HTML",
+        reply_markup=mod_toggle_confirm_keyboard(sid, idx, filename),
+    )
     await callback.answer()
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("dm_ok:"))
-async def confirm_delete(callback: CallbackQuery) -> None:
-    parsed = _parts(callback.data, "dm_ok:")
-    if not parsed:
-        await deny_access(callback)
+@router.callback_query(lambda c: c.data and c.data.startswith("mt_ok:"))
+async def confirm_toggle(callback: CallbackQuery) -> None:
+    parts = _toggle_parts(callback.data, "mt_ok:")
+    if parts is None:
+        await callback.answer("Некорректный выбор.", show_alert=True)
         return
-    sid, idx = parsed
+    sid, idx, token = parts
     server = resolve_server(sid)
     if server is None:
         await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
         return
-    if _addon_software(server) == "vanilla":
-        await callback.answer("🍃 Vanilla: управление дополнениями отключено.", show_alert=True)
-        return
-    if not access_control.can_server(callback.from_user.id, sid, "mods.delete"):
+    if _addon_software(server) == "vanilla" or not _can_toggle(callback.from_user.id, sid):
         await deny_access(callback)
         return
     try:
-        files = await _files_for(server)
+        filename = await _selected_addon(server, idx, token)
+        if filename is None:
+            await callback.answer("Список изменился. Обновите его.", show_alert=True)
+            return
+        ran, updated_name = await toggle_addon(server, filename)
+        if not ran:
+            await callback.answer("⏹ Сначала остановите Minecraft.", show_alert=True)
+            return
+        files = await _files_for(server) or []
+    except (FileExistsError, FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+        await callback.answer(f"❌ Не удалось изменить файл: {str(exc)[:100]}", show_alert=True)
+        return
     except Exception as exc:  # noqa: BLE001
-        await callback.answer(f"SSH: {str(exc)[:120]}", show_alert=True)
+        await callback.answer(f"❌ Сервер недоступен: {str(exc)[:100]}", show_alert=True)
         return
-    if files is None or idx >= len(files) or not _safe(files[idx]):
-        await callback.answer("Некорректный файл.", show_alert=True)
-        return
-    if server.ssh_remote is not None:
-        try:
-            await server.ssh_remote.request("delete_mod", filename=files[idx])
-        except Exception as exc:  # noqa: BLE001
-            await callback.answer(f"SSH: {str(exc)[:120]}", show_alert=True)
-            return
-    else:
-        root = os.path.realpath(server.mods_dir)
-        target = os.path.realpath(os.path.join(server.mods_dir, files[idx]))
-        try:
-            inside_mods = os.path.commonpath([root, target]) == root
-        except ValueError:
-            inside_mods = False
-        if not inside_mods:
-            await callback.answer("Недопустимый путь.", show_alert=True)
-            return
-        try:
-            os.remove(target)
-        except FileNotFoundError:
-            await callback.answer("Файл уже удалён.", show_alert=True)
-            return
-    await callback.answer("Удалено")
-    files = await _files_for(server) or []
-    await callback.message.edit_text(_text(files, callback.from_user.id, sid, software=_addon_software(server)), parse_mode="HTML", reply_markup=mods_list_keyboard(len(files), callback.from_user.id, sid))
+    await safe_edit_text(
+        callback.message,
+        f"✅ <code>{html.escape(str(updated_name))}</code>\n\n"
+        + _text(files, callback.from_user.id, sid, software=_addon_software(server)),
+        parse_mode="HTML",
+        reply_markup=mods_list_keyboard(files, callback.from_user.id, sid),
+    )
+    await callback.answer("✅ Готово. Изменения применятся после запуска сервера.")
 
 
 @router.message(ModsStates.awaiting_upload, F.document)
@@ -222,7 +238,7 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
                 f"✅ <code>{html.escape(safe_name)}</code> загружен на удалённый сервер.\n\n"
                 f"{_text(files, message.from_user.id, sid, software=_addon_software(server))}",
                 parse_mode="HTML",
-                reply_markup=mods_list_keyboard(len(files), message.from_user.id, sid),
+                reply_markup=mods_list_keyboard(files, message.from_user.id, sid),
             )
         except Exception as exc:  # noqa: BLE001
             await status.edit_text(
@@ -263,7 +279,7 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
             os.remove(temp_path)
         except FileNotFoundError:
             pass
-    files = _files(server.mods_dir) or []
+    files = list_addons(server.mods_dir) or []
     await status.edit_text(
         f"✅ <code>{html.escape(safe_name)}</code> загружен.\n\n"
         f"{_text(files, message.from_user.id, sid)}",
