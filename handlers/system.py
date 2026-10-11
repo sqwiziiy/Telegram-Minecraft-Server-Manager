@@ -661,11 +661,6 @@ async def show_backup_info(callback: CallbackQuery) -> None:
             f"\n📄 Файлов: {data['file_count']}\n"
             f"📦 Размер до сжатия: {total_mb:.1f} МБ\n"
         )
-        if data["preview"]:
-            preview = "\n".join(
-                f"• <code>{html.escape(name[:100])}</code>" for name in data["preview"]
-            )
-            title += f"\n<b>Файлы внутри (первые 12):</b>\n{preview}"
     await safe_edit_text(
         callback.message,
         title,
