@@ -21,6 +21,7 @@ from keyboards.inline import (
     backup_list_keyboard,
     backup_menu_keyboard,
     backup_result_keyboard,
+    backup_restore_confirm_keyboard,
     confirm_keyboard,
     events_keyboard,
     logs_keyboard,
@@ -32,6 +33,7 @@ from services.auto_stop import auto_stop_manager
 from services.auto_backup import auto_backup_manager
 from services.backup import create_backup
 from services.backup_catalog import backup_info, list_backups
+from services.restore import restore_world
 from services.event_history import event_history
 from services.telegram_context import resolve_server, safe_edit_text
 
@@ -665,6 +667,133 @@ async def show_backup_info(callback: CallbackQuery) -> None:
         callback.message,
         title,
         parse_mode="HTML",
-        reply_markup=backup_info_keyboard(server_id, page),
+        reply_markup=backup_info_keyboard(
+            server_id, page,
+            selected_index=index,
+            token=token,
+            can_restore=bool(data["valid"] and access_control.can_server(
+                callback.from_user.id, server_id, "backup.restore"
+            )),
+        ),
     )
     await callback.answer()
+
+def _parse_restore_callback(data: str, prefix: str):
+    if not isinstance(data, str) or not data.startswith(prefix):
+        return None
+    parts = data[len(prefix):].split(":")
+    if (
+        len(parts) != 4 or not parts[0]
+        or not parts[1].isdigit() or len(parts[1]) > 4
+        or not parts[2].isdigit() or len(parts[2]) > 6
+        or len(parts[3]) != 10 or any(ch not in "0123456789abcdef" for ch in parts[3])
+    ):
+        return None
+    sid, p, i, fingerprint = parts
+    page, index = int(p), int(i)
+    if index // BACKUP_PAGE_SIZE != page:
+        return None
+    return sid, page, index, fingerprint
+
+
+async def _resolve_restore_selection(callback, prefix: str):
+    parsed = _parse_restore_callback(callback.data, prefix)
+    if parsed is None:
+        await callback.answer("Некорректный выбор архива.", show_alert=True)
+        return None
+    sid, page, index, token = parsed
+    server = resolve_server(sid)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return None
+    if not access_control.can_server(callback.from_user.id, sid, "backup.restore"):
+        await deny_access(callback)
+        return None
+    try:
+        entries = await _server_backups(server)
+        if index >= len(entries) or addon_token(entries[index]["name"]) != token:
+            await callback.answer("Список архивов изменился. Откройте его заново.", show_alert=True)
+            return None
+        filename = entries[index]["name"]
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"❌ Не удалось получить архив: {str(exc)[:110]}", show_alert=True)
+        return None
+    return server, page, index, token, filename
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("bk_restore:"))
+async def ask_restore_world(callback: CallbackQuery) -> None:
+    selection = await _resolve_restore_selection(callback, "bk_restore:")
+    if selection is None:
+        return
+    server, page, index, token, filename = selection
+    try:
+        if (await server.manager.status()).running:
+            await callback.answer("⏹ Для восстановления сначала остановите Minecraft.", show_alert=True)
+            return
+        details = await _server_backup_details(server, filename)
+        if not details["valid"]:
+            await callback.answer("❌ Структура ZIP повреждена.", show_alert=True)
+            return
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"❌ Не удалось проверить сервер: {str(exc)[:105]}", show_alert=True)
+        return
+    await safe_edit_text(
+        callback.message,
+        f"⚠️ <b>Восстановить мир · {html.escape(server.server_name)}?</b>\n\n"
+        f"📦 <code>{html.escape(filename)}</code>\n\n"
+        "Текущий мир будет заменён. Перед заменой автоматически создаётся "
+        "отдельная защитная копия. Сервер должен быть выключен.\n\n"
+        "Для продолжения подтвердите действие.",
+        parse_mode="HTML",
+        reply_markup=backup_restore_confirm_keyboard(server.server_id, page, index, token),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("bk_restore_ok:"))
+async def execute_restore_world(callback: CallbackQuery) -> None:
+    selection = await _resolve_restore_selection(callback, "bk_restore_ok:")
+    if selection is None:
+        return
+    server, page, index, token, filename = selection
+    await callback.answer()
+    await safe_edit_text(
+        callback.message,
+        f"⏳ <b>Восстанавливаю мир · {html.escape(server.server_name)}</b>\n"
+        "Проверяю ZIP и создаю защитную копию текущего мира…",
+        parse_mode="HTML",
+    )
+    try:
+        ran, outcome = await restore_world(server, filename)
+        if not ran:
+            result = "⏹ Сервер запущен. Восстановление отменено; мир не изменён."
+        elif outcome is None:
+            raise RuntimeError("No restoration result received")
+        else:
+            await event_history.record(
+                server, kind="world_restore",
+                text=f"Мир восстановлен из {filename}; защитная копия: {outcome['protected']}; "
+                f"Telegram · {_telegram_actor(callback.from_user)}",
+            )
+            result = (
+                "✅ <b>Мир восстановлен!</b>\n\n"
+                f"📦 Из: <code>{html.escape(outcome['restored'])}</code>\n"
+                f"🛡 Защитный бэкап: <code>{html.escape(outcome['protected'])}</code>\n"
+                "▶️ Теперь можно запускать Minecraft."
+            )
+            if outcome.get("warning"):
+                result += f"\n⚠️ {html.escape(outcome['warning'])}"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Restore failed for %s", server.server_id)
+        result = (
+            "❌ <b>Восстановление не завершено.</b>\n"
+            f"<code>{html.escape(str(exc)[:500])}</code>\n"
+            "Проверьте состояние сервера и его мир перед запуском."
+        )
+    await safe_edit_text(
+        callback.message,
+        result,
+        parse_mode="HTML",
+        reply_markup=backup_result_keyboard(server.server_id),
+    )
