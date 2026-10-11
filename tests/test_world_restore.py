@@ -156,19 +156,19 @@ class RestoreUiTests(unittest.TestCase):
         item = backup_info_keyboard("storm", 0, selected_index=1,
                                     token="0123456789", can_restore=True)
         callbacks = [x.callback_data for row in item.inline_keyboard for x in row]
-        self.assertIn("bk_restore:storm:0:1:0123456789", callbacks)
+        self.assertIn("br:storm:0:1:0123456789", callbacks)
         limited = backup_info_keyboard("storm", 0, selected_index=1,
                                        token="0123456789", can_restore=False)
-        self.assertNotIn("bk_restore:storm:0:1:0123456789",
+        self.assertNotIn("br:storm:0:1:0123456789",
                          [x.callback_data for row in limited.inline_keyboard for x in row])
         button = backup_restore_confirm_keyboard("storm", 0, 1, "0123456789")
         self.assertEqual(button.inline_keyboard[0][0].callback_data,
-                         "bk_restore_ok:storm:0:1:0123456789")
+                         "br_ok:storm:0:1:0123456789")
 
     def test_invalid_callback_fails_closed(self):
-        for payload in ("bk_restore:storm:0:6:0123456789", "bk_restore:storm:x:0:0123456789",
-                        "bk_restore:storm:0:1:../etc", "bk_restore:storm:0:1:bad"):
-            self.assertIsNone(system._parse_restore_callback(payload, "bk_restore:"))
+        for payload in ("br:storm:0:6:0123456789", "br:storm:x:0:0123456789",
+                        "br:storm:0:1:../etc", "br:storm:0:1:bad"):
+            self.assertIsNone(system._parse_restore_callback(payload, "br:"))
 
 
 class RestoreCoordinatorTests(unittest.IsolatedAsyncioTestCase):
