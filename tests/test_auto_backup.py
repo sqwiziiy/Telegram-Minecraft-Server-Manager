@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import time
@@ -106,6 +107,67 @@ class AutoBackupTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(AutoBackupManager(manager.state_file).status(server)["pending"])
                 await manager.check_server(server)
                 backup.assert_awaited_once_with(server, automatic=True)
+
+    async def test_creation_status_and_last_backup_survive_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            server = fake_server()
+            manager = AutoBackupManager(path)
+            await manager.set_interval(server, 21600)
+            manager._schedules[server.server_id].next_due_at = time.time() - 1
+            entered = asyncio.Event()
+            release = asyncio.Event()
+
+            async def slow_backup(*args, **kwargs):
+                entered.set()
+                await release.wait()
+                return "✅ <b>Бэкап создан</b>\nРазмер: <code>48.2 MB</code>"
+
+            with (
+                patch("services.auto_backup.event_history.record", new_callable=AsyncMock),
+                patch("services.auto_backup.create_backup", side_effect=slow_backup),
+            ):
+                task = asyncio.create_task(manager.check_server(server))
+                try:
+                    await asyncio.wait_for(entered.wait(), timeout=2)
+                    status = manager.status(server)
+                    self.assertTrue(status["running"])
+                    self.assertTrue(status["pending"])
+                    self.assertIsNotNone(status["started_at"])
+                    # After a crash, "creating" must not persist indefinitely.
+                    recovered_during_copy = AutoBackupManager(path)
+                    self.assertFalse(recovered_during_copy.status(server)["running"])
+                    self.assertTrue(recovered_during_copy.status(server)["pending"])
+                finally:
+                    release.set()
+                    await task
+
+            self.assertFalse(manager.status(server)["running"])
+            self.assertFalse(manager.status(server)["pending"])
+            self.assertIsNotNone(manager.status(server)["last_completed_at"])
+            self.assertEqual(manager.status(server)["last_size_mb"], 48.2)
+            restored = AutoBackupManager(path)
+            self.assertEqual(restored.status(server)["last_size_mb"], 48.2)
+            self.assertIsNotNone(restored.status(server)["last_completed_at"])
+
+    async def test_backup_exception_becomes_retryable_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = fake_server()
+            path = Path(tmp) / "state.json"
+            manager = AutoBackupManager(path)
+            await manager.set_interval(server, 21600)
+            manager._schedules[server.server_id].next_due_at = time.time() - 1
+            with (
+                patch("services.auto_backup.event_history.record", new_callable=AsyncMock),
+                patch("services.auto_backup.create_backup", new_callable=AsyncMock, side_effect=RuntimeError("failed")),
+            ):
+                await manager.check_server(server)
+            status = manager.status(server)
+            self.assertTrue(status["pending"])
+            self.assertFalse(status["running"])
+            self.assertGreater(status["retry_in_seconds"], 0)
+            self.assertIsNotNone(status["last_failed_at"])
+            self.assertIsNotNone(AutoBackupManager(path).status(server)["last_failed_at"])
 
     async def test_invalid_interval_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
