@@ -95,7 +95,7 @@ class SSHRemote:
         except (asyncssh.Error, OSError, asyncio.TimeoutError) as exc:
             uncertainty = (
                 " Operation may have completed remotely: refresh server status before retrying."
-                if action in {"start", "stop", "restart", "backup", "configure_properties"}
+                if action in {"start", "stop", "restart", "backup", "configure_properties", "toggle_mod"}
                 else ""
             )
             raise ConnectionError(
