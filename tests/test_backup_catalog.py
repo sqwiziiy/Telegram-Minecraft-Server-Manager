@@ -47,7 +47,7 @@ class CatalogTests(unittest.TestCase):
             unknown = next(e for e in entries if e["name"] == "evil.zip")
             self.assertEqual(unknown["type"], "Другой ZIP (требует проверки)")
             self.assertFalse(unknown["known_format"])
-            self.assertEqual(entries[0]["created"], "12.10.2026 02:00:00")
+            self.assertEqual(next(e for e in entries if e["name"] == protected.name)["created"], "12.10.2026 02:00:00")
             self.assertEqual(list_backups(str(root / "missing")), [])
 
     def test_thirteen_legacy_zip_archives_are_counted_without_changing_pagination(self):
