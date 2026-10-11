@@ -26,7 +26,7 @@ from services.auto_stop import auto_stop_manager
 from services.auto_backup import auto_backup_manager
 from services.backup import create_backup
 from services.event_history import event_history
-from services.telegram_context import resolve_server
+from services.telegram_context import resolve_server, safe_edit_text
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -155,26 +155,49 @@ def _backup_interval_text(seconds: int) -> str:
     }.get(seconds, f"{seconds} сек")
 
 
+def _auto_backup_status_line(state: dict) -> str:
+    if not state["enabled"]:
+        return "🚫 Выключен"
+    if state["running"]:
+        started = datetime.fromtimestamp(state["started_at"]).astimezone().strftime("%H:%M:%S")
+        return f"⏳ Создаётся бэкап… (начало в {started})"
+    if state["pending"] and state["last_failed_at"]:
+        retry = state["retry_in_seconds"]
+        return (
+            "❌ Последняя попытка завершилась ошибкой. "
+            + (f"Повтор через {max(1, (retry + 59) // 60)} мин." if retry else "Повторная попытка ожидается.")
+        )
+    if state["pending"]:
+        return "⏳ Срок наступил, ожидает остановки Minecraft."
+    return "🕒 Ожидает следующего срока"
+
+
 def _auto_backup_text(server) -> str:
     state = auto_backup_manager.status(server)
     if not state["enabled"]:
-        summary = "🚫 Выключен"
-    else:
-        due = datetime.fromtimestamp(state["next_due_at"]).astimezone().strftime("%d.%m.%Y %H:%M")
-        summary = (
-            f"✅ Каждые {_backup_interval_text(state['interval_seconds'])}\n"
-            f"📅 Следующий срок: <code>{due}</code> (время сервера)"
+        return (
+            f"💾 <b>Автобэкап · {html.escape(server.server_name)}</b>\n\n"
+            "🚫 Выключен\n\n"
+            "Автоматические копии создаются только при выключенном сервере."
         )
-        if state["pending"]:
-            summary += "\n⏳ Срок наступил. Ожидает полной остановки Minecraft."
+
+    due = datetime.fromtimestamp(state["next_due_at"]).astimezone().strftime("%d.%m.%Y %H:%M")
+    history = ""
+    if state["last_completed_at"]:
+        completed = datetime.fromtimestamp(state["last_completed_at"]).astimezone().strftime("%d.%m.%Y %H:%M")
+        size = (
+            f" · {state['last_size_mb']:.1f} МБ"
+            if state["last_size_mb"] is not None else ""
+        )
+        history = f"\n✅ Последний успешный: <code>{completed}</code>{size}"
 
     return (
         f"💾 <b>Автобэкап · {html.escape(server.server_name)}</b>\n\n"
-        f"{summary}\n\n"
-        "Копирование запускается только при выключенном сервере. "
-        "Если сервер запущен, задача ждёт его остановки. "
-        "Пропущенные интервалы объединяются в один бэкап; "
-        "следующий отсчёт начинается после успешного копирования."
+        f"🔁 Каждые {_backup_interval_text(state['interval_seconds'])}\n"
+        f"📅 Следующий срок: <code>{due}</code> (время сервера)\n"
+        f"{_auto_backup_status_line(state)}{history}\n\n"
+        "Копирование только при выключенном сервере. "
+        "После завершения следующий срок отсчитывается заново."
     )
 
 
@@ -197,11 +220,12 @@ async def auto_tasks_menu(callback: CallbackQuery) -> None:
     backup = auto_backup_manager.status(server)
     stop_label = _duration_text(stop["timeout_seconds"]) if stop["enabled"] else "выкл"
     backup_label = _backup_interval_text(backup["interval_seconds"]) if backup["enabled"] else "выкл"
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"⚙️ <b>Автозадачи · {html.escape(server.server_name)}</b>\n\n"
         f"⏱ Автостоп: <b>{stop_label}</b>\n"
-        f"💾 Автобэкап: <b>{backup_label}</b>"
-        + (" · ⏳ ожидает остановки" if backup["pending"] else ""),
+        f"💾 Автобэкап: <b>{backup_label}</b>\n"
+        f"{_auto_backup_status_line(backup)}",
         parse_mode="HTML",
         reply_markup=auto_tasks_keyboard(server_id, uid),
     )
@@ -220,7 +244,8 @@ async def auto_backup_menu(callback: CallbackQuery) -> None:
         return
 
     state = auto_backup_manager.status(server)
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         _auto_backup_text(server),
         parse_mode="HTML",
         reply_markup=auto_backup_keyboard(server_id, state["interval_seconds"]),
