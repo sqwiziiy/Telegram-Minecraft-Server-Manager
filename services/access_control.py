@@ -27,6 +27,7 @@ ALL_PERMISSIONS = frozenset({
     "backup.create",
     "backup.schedule",
     "backup.view",
+    "backup.restore",
 })
 
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
