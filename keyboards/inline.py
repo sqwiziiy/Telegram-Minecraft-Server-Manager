@@ -149,7 +149,7 @@ def backup_info_keyboard(
     if can_restore and selected_index is not None and token is not None:
         rows.append([InlineKeyboardButton(
             text="♻️ Восстановить этот мир",
-            callback_data=f"bk_restore:{server_id}:{page}:{selected_index}:{token}",
+            callback_data=f"br:{server_id}:{page}:{selected_index}:{token}",
         )])
     rows.append([
         InlineKeyboardButton(text="◀️ К списку", callback_data=f"bk_list:{server_id}:{page}"),
@@ -164,7 +164,7 @@ def backup_restore_confirm_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="⚠️ Да, восстановить мир",
-            callback_data=f"bk_restore_ok:{server_id}:{page}:{index}:{token}",
+            callback_data=f"br_ok:{server_id}:{page}:{index}:{token}",
         )],
         [InlineKeyboardButton(text="❌ Отмена", callback_data=f"bk_list:{server_id}:{page}")],
     ])
