@@ -130,9 +130,9 @@ def backup_list_keyboard(server_id: str, page: int, items: list[dict], total: in
         )])
     nav = []
     if page:
-        nav.append(InlineKeyboardButton(text="◀️ Раньше", callback_data=f"bk_list:{server_id}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text="◀️ Новее", callback_data=f"bk_list:{server_id}:{page - 1}"))
     if offset + len(items) < total:
-        nav.append(InlineKeyboardButton(text="Позже ▶️", callback_data=f"bk_list:{server_id}:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="Старее ▶️", callback_data=f"bk_list:{server_id}:{page + 1}"))
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(text="🔄 Обновить список", callback_data=f"bk_list:{server_id}:{page}")])
