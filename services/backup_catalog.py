@@ -1,7 +1,9 @@
 """Read-only listing and inspection of Minecraft world ZIP backups."""
 from __future__ import annotations
 
+import os
 import re
+import stat
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -57,17 +59,21 @@ def backup_info(backup_dir: str, filename: str) -> dict:
     if meta is None:
         raise FileNotFoundError("Backup not found or unsafe file type")
     try:
-        with zipfile.ZipFile(item, "r") as archive:
-            infos = archive.infolist()
-            meta["file_count"] = sum(not entry.is_dir() for entry in infos)
-            meta["uncompressed_bytes"] = sum(
-                entry.file_size for entry in infos if not entry.is_dir()
-            )
-            meta["preview"] = [
-                entry.filename[:180]
-                for entry in infos if not entry.is_dir()
-            ][:_PREVIEW_LIMIT]
-            meta["valid"] = True
+        fd = os.open(item, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise OSError("Backup is not a regular file")
+            with zipfile.ZipFile(handle, "r") as archive:
+                infos = archive.infolist()
+                meta["file_count"] = sum(not entry.is_dir() for entry in infos)
+                meta["uncompressed_bytes"] = sum(
+                    entry.file_size for entry in infos if not entry.is_dir()
+                )
+                meta["preview"] = [
+                    entry.filename[:180]
+                    for entry in infos if not entry.is_dir()
+                ][:_PREVIEW_LIMIT]
+                meta["valid"] = True
     except (zipfile.BadZipFile, OSError, ValueError):
         meta.update(valid=False, file_count=None, uncompressed_bytes=None, preview=[])
     return meta
