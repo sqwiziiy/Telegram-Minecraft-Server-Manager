@@ -11,7 +11,7 @@ from pathlib import Path
 # New backups use six-digit microseconds. Old or manually copied archives
 # may have different names; don't silently exclude valid ZIPs from the list.
 _ARCHIVE_RE = re.compile(
-    r"^world_(?P<kind>auto_backup|backup|pre_restore)_(?P<stamp>\\d{8}_\\d{6}_\\d{6})\\.zip$"
+    r"^world_(?P<kind>auto_backup|backup|pre_restore)_(?P<stamp>\d{8}_\d{6}_\d{6})\.zip$"
 )
 _LABELS = {
     "auto_backup": "Автоматический",
@@ -27,7 +27,7 @@ def _safe_zip_filename(filename: str) -> bool:
         and filename.lower().endswith(".zip")
         and not filename.startswith(".")
         and len(filename.encode("utf-8")) <= 255
-        and not any(char in filename for char in ("/", "\\\\", "\\x00", "\\n", "\\r"))
+        and not any(char in filename for char in ("/", "\\", "\x00", "\n", "\r"))
         and all(ord(char) >= 32 for char in filename)
     )
 
