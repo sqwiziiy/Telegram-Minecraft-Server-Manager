@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("BOT_TOKEN", "123456:test-token")
@@ -9,7 +10,7 @@ os.environ.setdefault("ADMIN_IDS", "123456789")
 os.environ.setdefault("RCON_PASSWORD", "test-rcon-password")
 
 from handlers import system  # noqa: E402
-from keyboards.inline import back_to_server_keyboard, logs_keyboard, auto_backup_keyboard, auto_stop_keyboard  # noqa: E402
+from keyboards.inline import back_to_server_keyboard, logs_keyboard, auto_backup_keyboard, auto_stop_keyboard, auto_tasks_keyboard  # noqa: E402
 
 
 class SystemUiTests(unittest.TestCase):
@@ -38,6 +39,43 @@ class SystemUiTests(unittest.TestCase):
         ))
         stop_buttons = [button.callback_data for row in auto_stop_keyboard("storm", 0).inline_keyboard for button in row]
         self.assertIn("tasks:storm", stop_buttons)
+
+    def test_auto_task_refresh_controls_exist(self) -> None:
+        backup_buttons = [b.callback_data for row in auto_backup_keyboard("storm", 21600).inline_keyboard for b in row]
+        self.assertIn("autobackup:storm", backup_buttons)
+        task_buttons = [b.callback_data for row in auto_tasks_keyboard("storm", 123456789).inline_keyboard for b in row]
+        self.assertIn("tasks:storm", task_buttons)
+
+    def test_auto_backup_ui_shows_active_and_last_success(self) -> None:
+        server = SimpleNamespace(server_id="storm", server_name="Storm")
+        status = {
+            "enabled": True,
+            "interval_seconds": 21600,
+            "next_due_at": 1720000000.0,
+            "pending": True,
+            "running": True,
+            "started_at": 1720000000.0,
+            "retry_in_seconds": 0,
+            "last_completed_at": 1719900000.0,
+            "last_size_mb": 48.2,
+            "last_failed_at": None,
+        }
+        with patch.object(system.auto_backup_manager, "status", return_value=status):
+            body = system._auto_backup_text(server)
+        self.assertIn("Создаётся бэкап", body)
+        self.assertIn("48.2 МБ", body)
+
+    def test_auto_backup_ui_distinguishes_error_from_waiting(self) -> None:
+        status = {
+            "enabled": True,
+            "pending": True,
+            "running": False,
+            "last_failed_at": 1720000000.0,
+            "retry_in_seconds": 299,
+        }
+        self.assertIn("ошибкой", system._auto_backup_status_line(status))
+        status["last_failed_at"] = None
+        self.assertIn("ожидает остановки", system._auto_backup_status_line(status))
 
     def test_backup_result_keyboard_returns_to_server(self) -> None:
         keyboard = back_to_server_keyboard("storm-survival")
