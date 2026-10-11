@@ -179,6 +179,35 @@ class RestoreCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ran)
         self.assertIsNone(data)
 
+    async def test_cancellation_does_not_release_process_lock_during_restore(self):
+        process_lock = asyncio.Lock()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def run_with_lock(action):
+            async with process_lock:
+                return True, await action()
+
+        async def delayed_request(*args, **kwargs):
+            started.set()
+            await release.wait()
+            return {"restored": "good.zip", "protected": "safety.zip", "warning": ""}
+
+        remote = SimpleNamespace(request=AsyncMock(side_effect=delayed_request))
+        manager = SimpleNamespace(run_if_stopped=AsyncMock(side_effect=run_with_lock))
+        server = SimpleNamespace(server_id="test", manager=manager, ssh_remote=remote)
+        task = asyncio.create_task(restore_world(server, "good.zip"))
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            self.assertTrue(process_lock.locked())
+        finally:
+            release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertFalse(process_lock.locked())
+
     async def test_ssh_restore_uses_remote_agent(self):
         async def perform(action):
             return True, await action()
