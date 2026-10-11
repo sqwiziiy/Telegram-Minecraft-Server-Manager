@@ -39,10 +39,41 @@ class CatalogTests(unittest.TestCase):
             (root / "evil.zip").write_bytes(b"ignored")
             (root / "world_backup_20261012_030000_000001.zip").symlink_to(manual)
             entries = list_backups(tmp)
-            self.assertEqual([e["name"] for e in entries], [protected.name, auto.name, manual.name])
-            self.assertEqual([e["type"] for e in entries], ["Защитный", "Автоматический", "Ручной"])
+            self.assertEqual([e["name"] for e in entries], [protected.name, auto.name, manual.name, "evil.zip"])
+            self.assertEqual([e["type"] for e in entries], [
+                "Защитный", "Автоматический", "Ручной", "Другой ZIP (требует проверки)"
+            ])
+            self.assertEqual([e["known_format"] for e in entries], [True, True, True, False])
             self.assertEqual(entries[0]["created"], "12.10.2026 02:00:00")
             self.assertEqual(list_backups(str(root / "missing")), [])
+
+    def test_thirteen_legacy_zip_archives_are_counted_without_changing_pagination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for i in range(6):
+                make_zip(root / f"world_backup_20261011_120000_{i:06d}.zip")
+            for i in range(6):
+                make_zip(root / f"world_backup_2025-09-{i + 1:02d}.zip")
+            make_zip(root / "minecraft-world-old-copy.zip")
+            (root / ".world_backup_20251011_120000.zip.partial").write_bytes(b"partial")
+            (root / "notes.txt").write_text("not a backup", encoding="utf-8")
+
+            entries = list_backups(tmp)
+            self.assertEqual(len(entries), 13)
+            self.assertEqual(sum(item["known_format"] for item in entries), 6)
+            self.assertTrue(any(item["type"] == "Ручной (старый формат)" for item in entries))
+            self.assertTrue(any(item["type"] == "Другой ZIP (требует проверки)" for item in entries))
+            self.assertEqual(backup_info(tmp, "minecraft-world-old-copy.zip")["file_count"], 2)
+
+            config = {"backup_dir": tmp}
+            remote_entries = remote_agent.dispatch({"action": "list_backups", "config": config})
+            self.assertEqual(len(remote_entries), 13)
+            self.assertEqual({entry["name"] for entry in entries},
+                             {entry["name"] for entry in remote_entries})
+            self.assertEqual(remote_agent.dispatch({
+                "action": "backup_info", "config": config,
+                "filename": "minecraft-world-old-copy.zip"
+            })["file_count"], 2)
 
     def test_inspect_read_only_rejects_unsafe_and_corrupt(self):
         with tempfile.TemporaryDirectory() as tmp:
