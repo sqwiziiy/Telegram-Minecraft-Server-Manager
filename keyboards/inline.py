@@ -88,6 +88,7 @@ def auto_tasks_keyboard(server_id: str, user_id: int) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="⏱ Автостоп", callback_data=f"autostop:{server_id}")])
     if access_control.can_server(user_id, server_id, "backup.schedule"):
         rows.append([InlineKeyboardButton(text="💾 Автобэкап", callback_data=f"autobackup:{server_id}")])
+    rows.append([InlineKeyboardButton(text="🔄 Обновить статус", callback_data=f"tasks:{server_id}")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
