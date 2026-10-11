@@ -25,6 +25,9 @@ from datetime import datetime
 from pathlib import Path
 
 _AUTO_RE = re.compile(r"^world_auto_backup_\d{8}_\d{6}_\d{6}\.zip$")
+_CATALOG_RE = re.compile(
+    r"^world_(?P<kind>auto_backup|backup|pre_restore)_(?P<stamp>\d{8}_\d{6}_\d{6})\.zip$"
+)
 _PARTIAL_RE = re.compile(r"^\.world_(?:auto_)?backup_\d{8}_\d{6}_\d{6}\.zip\.partial$")
 _MOD_RE = re.compile(r"^[A-Za-z0-9_\-. +\[\]()@#]+\.jar$")
 _ADDON_RE = re.compile(r"^[A-Za-z0-9_\-. +\[\]()@#]+\.jar(?:\.disabled)?$")
@@ -436,6 +439,52 @@ def make_backup(config, automatic):
                 print("WARNING: Minecraft saves could not be re-enabled", file=sys.stderr)
 
 
+def archive_metadata(entry):
+    match = _CATALOG_RE.fullmatch(entry.name)
+    if not match or entry.is_symlink() or not entry.is_file():
+        return None
+    try:
+        stamp = datetime.strptime(match.group("stamp"), "%Y%m%d_%H%M%S_%f")
+        size = entry.stat().st_size
+    except (OSError, ValueError):
+        return None
+    labels = {"backup": "Ручной", "auto_backup": "Автоматический", "pre_restore": "Защитный"}
+    return {
+        "name": entry.name, "type": labels[match.group("kind")],
+        "created": stamp.strftime("%d.%m.%Y %H:%M:%S"),
+        "timestamp": stamp.strftime("%Y%m%d_%H%M%S_%f"),
+        "size_bytes": size, "size_mb": round(size / 1048576, 1),
+    }
+
+
+def list_backups(config):
+    directory = path(config["backup_dir"])
+    if not directory.is_dir():
+        return []
+    records = [archive_metadata(f) for f in directory.iterdir()]
+    return sorted((x for x in records if x is not None),
+                  key=lambda x: (x["timestamp"], x["name"]), reverse=True)
+
+
+def backup_info(config, filename):
+    if not isinstance(filename, str) or not _CATALOG_RE.fullmatch(filename):
+        raise ValueError("Invalid backup filename")
+    entry = path(config["backup_dir"]) / filename
+    meta = archive_metadata(entry)
+    if meta is None:
+        raise FileNotFoundError("Backup not found or unsafe")
+    try:
+        with zipfile.ZipFile(entry, "r") as archive:
+            info = archive.infolist()
+            meta["file_count"] = sum(not x.is_dir() for x in info)
+            meta["uncompressed_bytes"] = sum(x.file_size for x in info if not x.is_dir())
+            meta["preview"] = [x.filename[:180] for x in info if not x.is_dir()][:12]
+            meta["valid"] = True
+    except (zipfile.BadZipFile, OSError, ValueError):
+        meta.update(valid=False, file_count=None, uncompressed_bytes=None, preview=[])
+    return meta
+
+
 def properties(config):
     folder = path(config["server_dir"])
     if not folder.is_dir():
@@ -587,6 +636,10 @@ def dispatch(request):
         return rcon(config, request["command"])
     if action == "tail_output":
         return tail_file(config, request.get("lines", 30), "output_log")
+    if action == "list_backups":
+        return list_backups(config)
+    if action == "backup_info":
+        return backup_info(config, request["filename"])
     if action == "list_mods":
         return list_mods(config)
     if action == "delete_mod":
