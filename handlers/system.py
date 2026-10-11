@@ -15,6 +15,12 @@ from keyboards.inline import (
     auto_tasks_keyboard,
     auto_backup_keyboard,
     back_to_server_keyboard,
+    BACKUP_PAGE_SIZE,
+    addon_token,
+    backup_info_keyboard,
+    backup_list_keyboard,
+    backup_menu_keyboard,
+    backup_result_keyboard,
     confirm_keyboard,
     events_keyboard,
     logs_keyboard,
@@ -25,6 +31,7 @@ from services.access_control import access_control
 from services.auto_stop import auto_stop_manager
 from services.auto_backup import auto_backup_manager
 from services.backup import create_backup
+from services.backup_catalog import backup_info, list_backups
 from services.event_history import event_history
 from services.telegram_context import resolve_server, safe_edit_text
 
@@ -496,8 +503,48 @@ async def server_logs(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+async def _server_backups(server) -> list[dict]:
+    if server.ssh_remote is not None:
+        return await server.ssh_remote.request("list_backups", timeout=30)
+    return await asyncio.to_thread(list_backups, server.backup_dir)
+
+
+async def _server_backup_details(server, filename: str) -> dict:
+    if server.ssh_remote is not None:
+        return await server.ssh_remote.request("backup_info", filename=filename, timeout=30)
+    return await asyncio.to_thread(backup_info, server.backup_dir, filename)
+
+
+def _can_access_backups(user_id: int, server_id: str) -> bool:
+    return (
+        access_control.can_server(user_id, server_id, "backup.create")
+        or access_control.can_server(user_id, server_id, "backup.view")
+    )
+
+
 @router.callback_query(lambda c: c.data and c.data.startswith("backup:"))
-async def server_backup(callback: CallbackQuery) -> None:
+async def backup_menu(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    uid = callback.from_user.id
+    if not _can_access_backups(uid, server_id):
+        await deny_access(callback)
+        return
+    await safe_edit_text(
+        callback.message,
+        f"💾 <b>Бэкапы · {html.escape(server.server_name)}</b>\n\n"
+        "Создайте копию мира или посмотрите сохранённые архивы.",
+        parse_mode="HTML",
+        reply_markup=backup_menu_keyboard(server_id, uid),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("bk_create:"))
+async def create_manual_backup(callback: CallbackQuery) -> None:
     server_id = callback.data.split(":", 1)[1]
     server = resolve_server(server_id)
     if server is None:
@@ -507,7 +554,8 @@ async def server_backup(callback: CallbackQuery) -> None:
         await deny_access(callback)
         return
     await callback.answer()
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"⏳ Создаю бэкап мира · {html.escape(server.server_name)}…",
         parse_mode="HTML",
     )
@@ -516,9 +564,112 @@ async def server_backup(callback: CallbackQuery) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Backup failed for %s", server_id)
         result = f"❌ Ошибка бэкапа: <code>{html.escape(str(exc))}</code>"
-
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         result,
         parse_mode="HTML",
-        reply_markup=back_to_server_keyboard(server_id),
+        reply_markup=backup_result_keyboard(server_id),
     )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("bk_list:"))
+async def show_backup_list(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit() or len(parts[2]) > 4:
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    _, server_id, raw_page = parts
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "backup.view"):
+        await deny_access(callback)
+        return
+    try:
+        entries = await _server_backups(server)
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"❌ Не удалось получить список: {str(exc)[:110]}", show_alert=True)
+        return
+
+    max_page = max(0, (len(entries) - 1) // BACKUP_PAGE_SIZE)
+    page = min(int(raw_page), max_page)
+    visible = entries[page * BACKUP_PAGE_SIZE:(page + 1) * BACKUP_PAGE_SIZE]
+    summary = (
+        f"📂 <b>Бэкапы · {html.escape(server.server_name)}</b>\n"
+        f"Всего архивов: <b>{len(entries)}</b> · страница {page + 1}/{max_page + 1}\n\n"
+    )
+    if not entries:
+        summary += "Архивов пока нет."
+    else:
+        summary += "Выберите архив для просмотра информации."
+    await safe_edit_text(
+        callback.message,
+        summary,
+        parse_mode="HTML",
+        reply_markup=backup_list_keyboard(server_id, page, visible, len(entries)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("bk_info:"))
+async def show_backup_info(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":")
+    if (
+        len(parts) != 5
+        or not parts[2].isdigit() or len(parts[2]) > 4
+        or not parts[3].isdigit() or len(parts[3]) > 6
+        or len(parts[4]) != 10
+        or any(ch not in "0123456789abcdef" for ch in parts[4])
+    ):
+        await callback.answer("Некорректный архив.", show_alert=True)
+        return
+    _, server_id, raw_page, raw_index, token = parts
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "backup.view"):
+        await deny_access(callback)
+        return
+    page, index = int(raw_page), int(raw_index)
+    if index // BACKUP_PAGE_SIZE != page:
+        await callback.answer("Некорректная страница архива.", show_alert=True)
+        return
+    try:
+        entries = await _server_backups(server)
+        if index >= len(entries) or addon_token(entries[index]["name"]) != token:
+            await callback.answer("Список архивов изменился. Обновите его.", show_alert=True)
+            return
+        data = await _server_backup_details(server, entries[index]["name"])
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"❌ Не удалось прочитать архив: {str(exc)[:110]}", show_alert=True)
+        return
+
+    title = (
+        f"📦 <b>Архив · {html.escape(server.server_name)}</b>\n\n"
+        f"🗂 <code>{html.escape(data['name'])}</code>\n"
+        f"📅 {html.escape(data['created'])}\n"
+        f"🏷 {html.escape(data['type'])}\n"
+        f"💾 {data['size_mb']:.1f} МБ\n"
+    )
+    if not data["valid"]:
+        title += "\n⚠️ Не удалось прочитать структуру ZIP. Использовать архив для восстановления нельзя."
+    else:
+        total_mb = data["uncompressed_bytes"] / 1048576
+        title += (
+            f"\n📄 Файлов: {data['file_count']}\n"
+            f"📦 Размер до сжатия: {total_mb:.1f} МБ\n"
+        )
+        if data["preview"]:
+            preview = "\n".join(
+                f"• <code>{html.escape(name[:100])}</code>" for name in data["preview"]
+            )
+            title += f"\n<b>Файлы внутри (первые 12):</b>\n{preview}"
+    await safe_edit_text(
+        callback.message,
+        title,
+        parse_mode="HTML",
+        reply_markup=backup_info_keyboard(server_id, page),
+    )
+    await callback.answer()
