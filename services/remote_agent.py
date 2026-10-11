@@ -474,12 +474,16 @@ def backup_info(config, filename):
     if meta is None:
         raise FileNotFoundError("Backup not found or unsafe")
     try:
-        with zipfile.ZipFile(entry, "r") as archive:
-            info = archive.infolist()
-            meta["file_count"] = sum(not x.is_dir() for x in info)
-            meta["uncompressed_bytes"] = sum(x.file_size for x in info if not x.is_dir())
-            meta["preview"] = [x.filename[:180] for x in info if not x.is_dir()][:12]
-            meta["valid"] = True
+        fd = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise OSError("Backup is not a regular file")
+            with zipfile.ZipFile(handle, "r") as archive:
+                info = archive.infolist()
+                meta["file_count"] = sum(not x.is_dir() for x in info)
+                meta["uncompressed_bytes"] = sum(x.file_size for x in info if not x.is_dir())
+                meta["preview"] = [x.filename[:180] for x in info if not x.is_dir()][:12]
+                meta["valid"] = True
     except (zipfile.BadZipFile, OSError, ValueError):
         meta.update(valid=False, file_count=None, uncompressed_bytes=None, preview=[])
     return meta
