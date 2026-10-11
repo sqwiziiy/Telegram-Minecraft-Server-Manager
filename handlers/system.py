@@ -721,9 +721,9 @@ async def _resolve_restore_selection(callback, prefix: str):
     return server, page, index, token, filename
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("bk_restore:"))
+@router.callback_query(lambda c: c.data and c.data.startswith("br:"))
 async def ask_restore_world(callback: CallbackQuery) -> None:
-    selection = await _resolve_restore_selection(callback, "bk_restore:")
+    selection = await _resolve_restore_selection(callback, "br:")
     if selection is None:
         return
     server, page, index, token, filename = selection
@@ -751,9 +751,9 @@ async def ask_restore_world(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.callback_query(lambda c: c.data and c.data.startswith("bk_restore_ok:"))
+@router.callback_query(lambda c: c.data and c.data.startswith("br_ok:"))
 async def execute_restore_world(callback: CallbackQuery) -> None:
-    selection = await _resolve_restore_selection(callback, "bk_restore_ok:")
+    selection = await _resolve_restore_selection(callback, "br_ok:")
     if selection is None:
         return
     server, page, index, token, filename = selection
