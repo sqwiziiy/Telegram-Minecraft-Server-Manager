@@ -14,6 +14,7 @@ from contextlib import contextmanager
 import re
 import shlex
 import signal
+import stat
 import socket
 import struct
 import subprocess
@@ -26,6 +27,7 @@ from pathlib import Path
 _AUTO_RE = re.compile(r"^world_auto_backup_\d{8}_\d{6}_\d{6}\.zip$")
 _PARTIAL_RE = re.compile(r"^\.world_(?:auto_)?backup_\d{8}_\d{6}_\d{6}\.zip\.partial$")
 _MOD_RE = re.compile(r"^[A-Za-z0-9_\-. +\[\]()@#]+\.jar$")
+_ADDON_RE = re.compile(r"^[A-Za-z0-9_\-. +\[\]()@#]+\.jar(?:\.disabled)?$")
 
 
 def path(value):
@@ -283,7 +285,10 @@ def list_mods(config):
     folder = path(config["mods_dir"])
     if not folder.is_dir():
         return None
-    return sorted(p.name for p in folder.iterdir() if p.is_file() and not p.is_symlink() and p.suffix.lower() == ".jar")
+    return sorted(
+        p.name for p in folder.iterdir()
+        if p.is_file() and not p.is_symlink() and _ADDON_RE.fullmatch(p.name)
+    )
 
 
 def mod_path(config, filename):
@@ -296,12 +301,43 @@ def mod_path(config, filename):
     return folder, dest
 
 
-def remove_mod(config, filename):
-    _, dest = mod_path(config, filename)
-    if not dest.exists():
-        return False
-    dest.unlink()
-    return True
+def toggle_mod(config, filename):
+    if not _ADDON_RE.fullmatch(filename):
+        raise ValueError("Invalid addon filename")
+    if get_status(config)["running"]:
+        raise RuntimeError("Minecraft must be stopped before toggling addons")
+    folder = path(config["mods_dir"]).resolve(strict=True)
+    source = folder / filename
+    destination_name = (
+        filename.removesuffix(".disabled")
+        if filename.endswith(".jar.disabled") else filename + ".disabled"
+    )
+    target = folder / destination_name
+    info = source.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("Addon must be a regular file")
+    if os.path.lexists(target):
+        raise FileExistsError(f"Target already exists: {destination_name}")
+    os.link(source, target, follow_symlinks=False)
+    try:
+        linked = target.lstat()
+        current = source.lstat()
+        if (
+            not stat.S_ISREG(linked.st_mode)
+            or linked.st_ino != info.st_ino or linked.st_dev != info.st_dev
+            or current.st_ino != info.st_ino or current.st_dev != info.st_dev
+        ):
+            raise RuntimeError("Addon changed while toggling; refusing to remove source")
+        source.unlink()
+    except BaseException:
+        try:
+            linked_now = target.lstat()
+            if linked_now.st_ino == info.st_ino and linked_now.st_dev == info.st_dev:
+                target.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return destination_name
 
 
 def commit_mod(config, filename, temporary_name):
@@ -528,7 +564,7 @@ def dispatch(request):
         return configure_properties(expected_config, request["content"])
     if action == "status":
         return get_status(config)
-    if action in ("start", "stop", "restart", "backup"):
+    if action in ("start", "stop", "restart", "backup", "toggle_mod"):
         # Lock on the remote filesystem rather than in a single bot process.
         # The lock also protects long offline backups from concurrent starts.
         with operation_lock(config):
@@ -541,6 +577,8 @@ def dispatch(request):
                 if get_status(config)["running"]:
                     raise RuntimeError("Minecraft is still running; refusing a second start")
                 return launch(config)
+            if action == "toggle_mod":
+                return toggle_mod(config, request["filename"])
             return make_backup(config, bool(request.get("automatic", False)))
     if action == "rcon":
         status = get_status(config)
@@ -552,7 +590,7 @@ def dispatch(request):
     if action == "list_mods":
         return list_mods(config)
     if action == "delete_mod":
-        return remove_mod(config, request["filename"])
+        raise ValueError("Permanent addon deletion is disabled; use toggle_mod")
     if action == "commit_mod":
         return commit_mod(config, request["filename"], request["temporary_name"])
     if action == "list_files":
