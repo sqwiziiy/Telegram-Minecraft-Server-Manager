@@ -116,6 +116,14 @@ class RestoreFilesTests(unittest.TestCase):
         self.assertEqual(len(list(self.backups.glob("world_pre_restore_*.zip"))), 1)
         self.assertFalse(list(self.root.glob(".world.restore-*")))
 
+    def test_failed_protective_archive_never_changes_world(self):
+        self.archive()
+        with patch.object(remote_agent, "_protect_old_world", side_effect=OSError("disk stopped")):
+            with self.assertRaisesRegex(OSError, "disk stopped"):
+                remote_agent.restore_world_files(self.config, self.source.name)
+        self.assertEqual((self.world / "level.dat").read_bytes(), b"original-level")
+        self.assertFalse(list(self.root.glob(".world.restore-*")))
+
     def test_insufficient_space_does_not_touch_world(self):
         self.archive()
         fake_usage = SimpleNamespace(free=1)
@@ -165,6 +173,16 @@ class RestoreUiTests(unittest.TestCase):
         self.assertEqual(button.inline_keyboard[0][0].callback_data,
                          "br_ok:storm:0:1:0123456789")
 
+    def test_callback_data_stays_under_telegram_limit_for_long_server_id(self):
+        sid = "s" * 32
+        info = backup_info_keyboard(sid, 1234, selected_index=9999999,
+                                    token="a" * 10, can_restore=True)
+        confirm = backup_restore_confirm_keyboard(sid, 1234, 9999999, "a" * 10)
+        for keyboard in (info, confirm):
+            for row in keyboard.inline_keyboard:
+                for button in row:
+                    self.assertLessEqual(len(button.callback_data.encode("utf-8")), 64)
+
     def test_invalid_callback_fails_closed(self):
         for payload in ("br:storm:0:6:0123456789", "br:storm:x:0:0123456789",
                         "br:storm:0:1:../etc", "br:storm:0:1:bad"):
@@ -178,6 +196,35 @@ class RestoreCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         ran, data = await restore_world(server, "good.zip")
         self.assertFalse(ran)
         self.assertIsNone(data)
+
+    async def test_local_offline_restore_calls_filesystem_core(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            world = root / "world"
+            world.mkdir()
+            (world / "level.dat").write_bytes(b"old")
+            backups = root / "backups"
+            backups.mkdir()
+            archive_name = "world_backup_20261012_120000_000001.zip"
+            with zipfile.ZipFile(backups / archive_name, "w") as z:
+                z.writestr("world/level.dat", b"new")
+
+            async def run_when_stopped(action):
+                return True, await action()
+
+            server = SimpleNamespace(
+                server_id="local-test", ssh_remote=None,
+                manager=SimpleNamespace(
+                    server_dir=root,
+                    run_if_stopped=AsyncMock(side_effect=run_when_stopped),
+                ),
+                world_dir=str(world), backup_dir=str(backups),
+            )
+            with patch("services.restore._assert_local_offline"):
+                ran, info = await restore_world(server, archive_name)
+            self.assertTrue(ran)
+            self.assertEqual((world / "level.dat").read_bytes(), b"new")
+            self.assertTrue((backups / info["protected"]).exists())
 
     async def test_cancellation_does_not_release_process_lock_during_restore(self):
         process_lock = asyncio.Lock()
