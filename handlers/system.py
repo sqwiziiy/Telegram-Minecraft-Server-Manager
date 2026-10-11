@@ -771,11 +771,14 @@ async def execute_restore_world(callback: CallbackQuery) -> None:
         elif outcome is None:
             raise RuntimeError("No restoration result received")
         else:
-            await event_history.record(
-                server, kind="world_restore",
-                text=f"Мир восстановлен из {filename}; защитная копия: {outcome['protected']}; "
-                f"Telegram · {_telegram_actor(callback.from_user)}",
-            )
+            try:
+                await event_history.record(
+                    server, kind="world_restore",
+                    text=f"Мир восстановлен из {filename}; защитная копия: {outcome['protected']}; "
+                    f"Telegram · {_telegram_actor(callback.from_user)}",
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Could not record successful world restore event")
             result = (
                 "✅ <b>Мир восстановлен!</b>\n\n"
                 f"📦 Из: <code>{html.escape(outcome['restored'])}</code>\n"
