@@ -611,7 +611,6 @@ def _exchange_directories(left, right):
     if result != 0:
         err = ctypes.get_errno()
         raise OSError(err, os.strerror(err))
-    _fsync_directory(Path(left).parent)
 
 
 def _protect_old_world(world, backups):
@@ -703,9 +702,13 @@ def restore_world_files(config, filename):
         swapped = True
         warning = ""
         try:
+            _fsync_directory(world_parent)
+        except OSError as exc:
+            warning = f"World swapped, but directory fsync failed: {exc}"
+        try:
             shutil.rmtree(stage)
         except OSError:
-            warning = f"Old world remains in staging folder: {stage}"
+            warning += f" Old world remains in staging folder: {stage}"
         return {
             "restored": filename,
             "protected": protected.name,
