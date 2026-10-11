@@ -8,8 +8,10 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+# New backups use six-digit microseconds. Old or manually copied archives
+# may have different names; don't silently exclude valid ZIPs from the list.
 _ARCHIVE_RE = re.compile(
-    r"^world_(?P<kind>auto_backup|backup|pre_restore)_(?P<stamp>\d{8}_\d{6}_\d{6})\.zip$"
+    r"^world_(?P<kind>auto_backup|backup|pre_restore)_(?P<stamp>\\d{8}_\\d{6}_\\d{6})\\.zip$"
 )
 _LABELS = {
     "auto_backup": "Автоматический",
@@ -19,18 +21,45 @@ _LABELS = {
 _PREVIEW_LIMIT = 12
 
 
+def _safe_zip_filename(filename: str) -> bool:
+    return (
+        isinstance(filename, str)
+        and filename.lower().endswith(".zip")
+        and not filename.startswith(".")
+        and len(filename.encode("utf-8")) <= 255
+        and not any(char in filename for char in ("/", "\\\\", "\\x00", "\\n", "\\r"))
+        and all(ord(char) >= 32 for char in filename)
+    )
+
+
 def _archive_meta(file: Path) -> dict | None:
-    match = _ARCHIVE_RE.fullmatch(file.name)
-    if not match or file.is_symlink() or not file.is_file():
+    if not _safe_zip_filename(file.name) or file.is_symlink() or not file.is_file():
         return None
     try:
-        stamp = datetime.strptime(match.group("stamp"), "%Y%m%d_%H%M%S_%f")
         info = file.stat()
-    except (OSError, ValueError):
+        match = _ARCHIVE_RE.fullmatch(file.name)
+        if match:
+            stamp = datetime.strptime(match.group("stamp"), "%Y%m%d_%H%M%S_%f")
+            archive_type = _LABELS[match.group("kind")]
+            known_format = True
+        else:
+            stamp = datetime.fromtimestamp(info.st_mtime)
+            lower = file.name.lower()
+            if lower.startswith("world_auto_backup_"):
+                archive_type = "Автоматический (старый формат)"
+            elif lower.startswith("world_pre_restore_"):
+                archive_type = "Защитный (старый формат)"
+            elif lower.startswith("world_backup_"):
+                archive_type = "Ручной (старый формат)"
+            else:
+                archive_type = "Другой ZIP (требует проверки)"
+            known_format = False
+    except (OSError, ValueError, OverflowError):
         return None
     return {
         "name": file.name,
-        "type": _LABELS[match.group("kind")],
+        "type": archive_type,
+        "known_format": known_format,
         "created": stamp.strftime("%d.%m.%Y %H:%M:%S"),
         "timestamp": stamp.strftime("%Y%m%d_%H%M%S_%f"),
         "size_bytes": info.st_size,
@@ -51,7 +80,7 @@ def list_backups(backup_dir: str) -> list[dict]:
 
 
 def backup_info(backup_dir: str, filename: str) -> dict:
-    if not isinstance(filename, str) or not _ARCHIVE_RE.fullmatch(filename):
+    if not _safe_zip_filename(filename):
         raise ValueError("Unknown backup filename")
     folder = Path(backup_dir)
     item = folder / filename
