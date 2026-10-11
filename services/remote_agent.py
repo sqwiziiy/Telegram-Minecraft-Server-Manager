@@ -621,8 +621,10 @@ def _protect_old_world(world, backups):
         with zipfile.ZipFile(partial, "x", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as output:
             for root, dirs, files in os.walk(world, followlinks=False):
                 for name in dirs:
-                    if (Path(root) / name).is_symlink():
+                    folder = Path(root) / name
+                    if folder.is_symlink():
                         raise ValueError("Symlink appeared while backing up existing world")
+                    output.write(folder, arcname=str(folder.relative_to(world.parent)) + "/")
                 for name in files:
                     candidate = Path(root) / name
                     if candidate.is_symlink() or not candidate.is_file():
