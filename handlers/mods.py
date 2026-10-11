@@ -154,8 +154,7 @@ async def ask_toggle(callback: CallbackQuery) -> None:
     await safe_edit_text(
         callback.message,
         f"🧩 <b>{verb} {_addon_labels(server)[2]}?</b>\n"
-        f"<code>{html.escape(filename)}</code>\n\n"
-        "Файл не удаляется. Сервер должен быть выключен.",
+        f"<code>{html.escape(filename)}</code>",
         parse_mode="HTML",
         reply_markup=mod_toggle_confirm_keyboard(sid, idx, filename),
     )
