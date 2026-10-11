@@ -284,5 +284,5 @@ async def upload_mod(message: Message, state: FSMContext) -> None:
         f"✅ <code>{html.escape(safe_name)}</code> загружен.\n\n"
         f"{_text(files, message.from_user.id, sid)}",
         parse_mode="HTML",
-        reply_markup=mods_list_keyboard(len(files), message.from_user.id, sid),
+        reply_markup=mods_list_keyboard(files, message.from_user.id, sid),
     )
