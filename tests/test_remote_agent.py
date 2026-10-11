@@ -115,18 +115,51 @@ class RemoteAgentTests(unittest.TestCase):
                 })
         self.assertFalse((self.root / "backups").exists())
 
-    def test_mods_are_confined_and_cannot_follow_symlinks(self):
-        (self.mods / "good.jar").write_bytes(b"valid")
+    def test_mods_toggle_without_deleting_and_preserve_contents(self):
+        original = self.mods / "good.jar"
+        original.write_bytes(b"valid addon data")
         outside = Path(self.tmp.name) / "outside.jar"
         outside.write_bytes(b"outside")
         (self.mods / "bad.jar").symlink_to(outside)
         self.assertEqual(remote_agent.list_mods(self.config), ["good.jar"])
+
         with self.assertRaises(ValueError):
-            remote_agent.remove_mod(self.config, "../outside.jar")
+            remote_agent.dispatch({"action": "toggle_mod", "config": self.config,
+                                   "filename": "../outside.jar"})
         with self.assertRaises(ValueError):
-            remote_agent.remove_mod(self.config, "bad.jar")
-        self.assertTrue(remote_agent.remove_mod(self.config, "good.jar"))
+            remote_agent.dispatch({"action": "toggle_mod", "config": self.config,
+                                   "filename": "bad.jar"})
+        with self.assertRaises(ValueError):
+            remote_agent.dispatch({"action": "delete_mod", "config": self.config,
+                                   "filename": "good.jar"})
+
+        result = remote_agent.dispatch({"action": "toggle_mod", "config": self.config,
+                                        "filename": "good.jar"})
+        self.assertEqual(result, "good.jar.disabled")
+        self.assertFalse(original.exists())
+        disabled = self.mods / result
+        self.assertEqual(disabled.read_bytes(), b"valid addon data")
+        self.assertEqual(remote_agent.list_mods(self.config), ["good.jar.disabled"])
+        self.assertEqual(remote_agent.dispatch({"action": "toggle_mod", "config": self.config,
+                                                "filename": result}), "good.jar")
+        self.assertEqual(original.read_bytes(), b"valid addon data")
+        self.assertFalse(disabled.exists())
         self.assertEqual(outside.read_bytes(), b"outside")
+
+    def test_toggle_rejects_collision_and_running_server(self):
+        (self.mods / "same.jar").write_bytes(b"original")
+        (self.mods / "same.jar.disabled").write_bytes(b"different")
+        with self.assertRaises(FileExistsError):
+            remote_agent.dispatch({"action": "toggle_mod", "config": self.config,
+                                   "filename": "same.jar"})
+        self.assertEqual((self.mods / "same.jar.disabled").read_bytes(), b"different")
+        (self.mods / "new.jar").write_bytes(b"new")
+        with patch.object(remote_agent, "get_status", return_value={"running": True}):
+            with self.assertRaisesRegex(RuntimeError, "stopped"):
+                remote_agent.dispatch({"action": "toggle_mod", "config": self.config,
+                                       "filename": "new.jar"})
+        self.assertTrue((self.mods / "new.jar").exists())
+        self.assertFalse((self.mods / "new.jar.disabled").exists())
 
     def test_mod_upload_commits_atomically_without_overwriting(self):
         temporary_name = ".upload-" + "a" * 24

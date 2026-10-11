@@ -1,3 +1,5 @@
+import hashlib
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from services.access_control import access_control
@@ -29,11 +31,13 @@ def server_home_keyboard(server: ManagedServer, user_id: int) -> InlineKeyboardM
     utility = []
     software = getattr(server, "server_software", "mods")
     addon_label = "🔌 Плагины" if software == "plugins" else "🧩 Моды"
-    for label, perm, action in (("💻 Консоль", "console.use", "console"), (addon_label, "mods.view", "mods"), ("📜 Логи", "logs.view", "logs"), ("💾 Бэкап", "backup.create", "backup")):
+    for label, perm, action in (("💻 Консоль", "console.use", "console"), (addon_label, "mods.view", "mods"), ("📜 Логи", "logs.view", "logs")):
         if action == "mods" and software == "vanilla":
             continue
         if access_control.can_server(user_id, sid, perm):
             utility.append(InlineKeyboardButton(text=label, callback_data=f"{action}:{sid}"))
+    if access_control.can_server(user_id, sid, "backup.create") or access_control.can_server(user_id, sid, "backup.view"):
+        utility.append(InlineKeyboardButton(text="💾 Бэкапы", callback_data=f"backup:{sid}"))
     for i in range(0, len(utility), 2):
         rows.append(utility[i:i + 2])
     if access_control.can_server(user_id, sid, "server.status"):
@@ -64,21 +68,112 @@ def console_exit_keyboard(server_id: str) -> InlineKeyboardMarkup:
     ]])
 
 
-def mods_list_keyboard(count: int, user_id: int, server_id: str | None = None) -> InlineKeyboardMarkup | None:
+def addon_token(filename: str) -> str:
+    # Compact fingerprint prevents stale numeric callbacks from toggling
+    # a different file after the list order changes.
+    return hashlib.blake2s(filename.encode("utf-8"), digest_size=5).hexdigest()
+
+
+def mods_list_keyboard(files: list[str], user_id: int, server_id: str | None = None) -> InlineKeyboardMarkup | None:
     if not server_id:
         return None
     rows: list[list[InlineKeyboardButton]] = []
-    if count > 0 and access_control.can_server(user_id, server_id, "mods.delete"):
-        buttons = [InlineKeyboardButton(text=f"🗑 {i + 1}", callback_data=f"dm:{server_id}:{i}") for i in range(count)]
+    allowed = access_control.can_server(user_id, server_id, "mods.toggle") or access_control.can_server(
+        user_id, server_id, "mods.delete"  # backward-compatible older roles
+    )
+    if files and allowed:
+        buttons = [
+            InlineKeyboardButton(
+                text=("✅" if filename.endswith(".jar.disabled") else "🚫") + f" {index + 1}",
+                callback_data=f"mt:{server_id}:{index}:{addon_token(filename)}",
+            )
+            for index, filename in enumerate(files)
+        ]
         rows.extend(buttons[i:i + 5] for i in range(0, len(buttons), 5))
+    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data=f"mods:{server_id}")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def mod_delete_confirm_keyboard(server_id: str, idx: int) -> InlineKeyboardMarkup:
+def mod_toggle_confirm_keyboard(server_id: str, idx: int, filename: str) -> InlineKeyboardMarkup:
+    verb = "включить" if filename.endswith(".jar.disabled") else "отключить"
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"dm_ok:{server_id}:{idx}"),
+        InlineKeyboardButton(
+            text=f"✅ Да, {verb}",
+            callback_data=f"mt_ok:{server_id}:{idx}:{addon_token(filename)}",
+        ),
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"mods:{server_id}"),
+    ]])
+
+
+BACKUP_PAGE_SIZE = 6
+
+
+def backup_menu_keyboard(server_id: str, user_id: int) -> InlineKeyboardMarkup:
+    rows = []
+    if access_control.can_server(user_id, server_id, "backup.create"):
+        rows.append([InlineKeyboardButton(text="➕ Создать бэкап", callback_data=f"bk_create:{server_id}")])
+    if access_control.can_server(user_id, server_id, "backup.view"):
+        rows.append([InlineKeyboardButton(text="📂 Просмотреть бэкапы", callback_data=f"bk_list:{server_id}:0")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def backup_list_keyboard(server_id: str, page: int, items: list[dict], total: int) -> InlineKeyboardMarkup:
+    rows = []
+    offset = page * BACKUP_PAGE_SIZE
+    for i, entry in enumerate(items):
+        token = addon_token(entry["name"])
+        rows.append([InlineKeyboardButton(
+            text=f"📦 {entry['created'][:16]} · {entry['size_mb']:.1f} МБ · {entry['type']}",
+            callback_data=f"bk_info:{server_id}:{page}:{offset + i}:{token}",
+        )])
+    nav = []
+    if page:
+        nav.append(InlineKeyboardButton(text="◀️ Новее", callback_data=f"bk_list:{server_id}:{page - 1}"))
+    if offset + len(items) < total:
+        nav.append(InlineKeyboardButton(text="Старее ▶️", callback_data=f"bk_list:{server_id}:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="🔄 Обновить список", callback_data=f"bk_list:{server_id}:{page}")])
+    rows.append([InlineKeyboardButton(text="◀️ Бэкапы", callback_data=f"backup:{server_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def backup_info_keyboard(
+    server_id: str, page: int, *,
+    selected_index: int | None = None, token: str | None = None,
+    can_restore: bool = False,
+) -> InlineKeyboardMarkup:
+    rows = []
+    if can_restore and selected_index is not None and token is not None:
+        rows.append([InlineKeyboardButton(
+            text="♻️ Восстановить этот мир",
+            callback_data=f"br:{server_id}:{page}:{selected_index}:{token}",
+        )])
+    rows.append([
+        InlineKeyboardButton(text="◀️ К списку", callback_data=f"bk_list:{server_id}:{page}"),
+        InlineKeyboardButton(text="💾 Меню", callback_data=f"backup:{server_id}"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def backup_restore_confirm_keyboard(
+    server_id: str, page: int, index: int, token: str,
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⚠️ Да, восстановить мир",
+            callback_data=f"br_ok:{server_id}:{page}:{index}:{token}",
+        )],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"bk_list:{server_id}:{page}")],
+    ])
+
+
+def backup_result_keyboard(server_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="💾 Бэкапы", callback_data=f"backup:{server_id}"),
+        InlineKeyboardButton(text="◀️ Сервер", callback_data=f"sv:{server_id}"),
     ]])
 
 
@@ -88,6 +183,7 @@ def auto_tasks_keyboard(server_id: str, user_id: int) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="⏱ Автостоп", callback_data=f"autostop:{server_id}")])
     if access_control.can_server(user_id, server_id, "backup.schedule"):
         rows.append([InlineKeyboardButton(text="💾 Автобэкап", callback_data=f"autobackup:{server_id}")])
+    rows.append([InlineKeyboardButton(text="🔄 Обновить статус", callback_data=f"tasks:{server_id}")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"sv:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -109,6 +205,7 @@ def auto_backup_keyboard(server_id: str, current_seconds: int) -> InlineKeyboard
         for label, seconds in options
     ]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="🔄 Обновить статус", callback_data=f"autobackup:{server_id}")])
     rows.append([InlineKeyboardButton(text="◀️ Автозадачи", callback_data=f"tasks:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

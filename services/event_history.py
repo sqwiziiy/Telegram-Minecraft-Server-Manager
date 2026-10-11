@@ -147,6 +147,7 @@ _KIND_ICON = {
     "auto_backup_pending": "⏳",
     "auto_backup_error": "❌",
     "auto_backup_setting": "⚙️",
+    "world_restore": "♻️",
     "manager_detected": "🔎",
 }
 
