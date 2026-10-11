@@ -110,6 +110,7 @@ def auto_backup_keyboard(server_id: str, current_seconds: int) -> InlineKeyboard
         for label, seconds in options
     ]
     rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="🔄 Обновить статус", callback_data=f"autobackup:{server_id}")])
     rows.append([InlineKeyboardButton(text="◀️ Автозадачи", callback_data=f"tasks:{server_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
