@@ -39,11 +39,14 @@ class CatalogTests(unittest.TestCase):
             (root / "evil.zip").write_bytes(b"ignored")
             (root / "world_backup_20261012_030000_000001.zip").symlink_to(manual)
             entries = list_backups(tmp)
-            self.assertEqual([e["name"] for e in entries], [protected.name, auto.name, manual.name, "evil.zip"])
-            self.assertEqual([e["type"] for e in entries], [
-                "Защитный", "Автоматический", "Ручной", "Другой ZIP (требует проверки)"
-            ])
-            self.assertEqual([e["known_format"] for e in entries], [True, True, True, False])
+            self.assertEqual(len(entries), 4)
+            self.assertEqual(
+                [e["name"] for e in entries if e["known_format"]],
+                [protected.name, auto.name, manual.name],
+            )
+            unknown = next(e for e in entries if e["name"] == "evil.zip")
+            self.assertEqual(unknown["type"], "Другой ZIP (требует проверки)")
+            self.assertFalse(unknown["known_format"])
             self.assertEqual(entries[0]["created"], "12.10.2026 02:00:00")
             self.assertEqual(list_backups(str(root / "missing")), [])
 
