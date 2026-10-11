@@ -38,6 +38,7 @@ PERMISSIONS: tuple[tuple[str, str], ...] = (
     ("mods.toggle", "Включение/отключение модов"),
     ("backup.create", "Ручной бэкап"),
     ("backup.view", "Просмотр бэкапов"),
+    ("backup.restore", "Восстановление мира (опасное действие)"),
     ("backup.schedule", "Расписание автобэкапа"),
 )
 PERMISSION_IDS = frozenset(key for key, _ in PERMISSIONS)
