@@ -140,11 +140,34 @@ def backup_list_keyboard(server_id: str, page: int, items: list[dict], total: in
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def backup_info_keyboard(server_id: str, page: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
+def backup_info_keyboard(
+    server_id: str, page: int, *,
+    selected_index: int | None = None, token: str | None = None,
+    can_restore: bool = False,
+) -> InlineKeyboardMarkup:
+    rows = []
+    if can_restore and selected_index is not None and token is not None:
+        rows.append([InlineKeyboardButton(
+            text="♻️ Восстановить этот мир",
+            callback_data=f"bk_restore:{server_id}:{page}:{selected_index}:{token}",
+        )])
+    rows.append([
         InlineKeyboardButton(text="◀️ К списку", callback_data=f"bk_list:{server_id}:{page}"),
         InlineKeyboardButton(text="💾 Меню", callback_data=f"backup:{server_id}"),
-    ]])
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def backup_restore_confirm_keyboard(
+    server_id: str, page: int, index: int, token: str,
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⚠️ Да, восстановить мир",
+            callback_data=f"bk_restore_ok:{server_id}:{page}:{index}:{token}",
+        )],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"bk_list:{server_id}:{page}")],
+    ])
 
 
 def backup_result_keyboard(server_id: str) -> InlineKeyboardMarkup:
