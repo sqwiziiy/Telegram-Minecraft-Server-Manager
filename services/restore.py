@@ -39,12 +39,33 @@ async def restore_world(server, filename: str) -> tuple[bool, dict | None]:
     """No network or file modifications unless the managed process is stopped."""
     async def operation() -> dict:
         async with _backup_locks.setdefault(server.server_id, asyncio.Lock()):
-            if server.ssh_remote is not None:
-                return await server.ssh_remote.request(
-                    "restore_world", filename=filename, timeout=4 * 3600
-                )
-            await asyncio.to_thread(_assert_local_offline, server)
-            config = {"world_dir": server.world_dir, "backup_dir": server.backup_dir}
-            return await asyncio.to_thread(remote_agent.restore_world_files, config, filename)
+            async def worker():
+                if server.ssh_remote is not None:
+                    return await server.ssh_remote.request(
+                        "restore_world", filename=filename, timeout=4 * 3600
+                    )
+                await asyncio.to_thread(_assert_local_offline, server)
+                config = {"world_dir": server.world_dir, "backup_dir": server.backup_dir}
+                return await asyncio.to_thread(remote_agent.restore_world_files, config, filename)
+
+            task = asyncio.create_task(worker(), name=f"restore_world_{server.server_id}")
+            try:
+                # Telegram callback cancellation must not release the start
+                # lock while an asyncio.to_thread filesystem swap continues.
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if task.done():
+                    try:
+                        task.exception()
+                    except asyncio.CancelledError:
+                        pass
+                raise
 
     return await server.manager.run_if_stopped(operation)
