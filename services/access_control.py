@@ -22,10 +22,12 @@ ALL_PERMISSIONS = frozenset({
     "console.use",
     "mods.view",
     "mods.upload",
-    "mods.delete",
+    "mods.delete",  # Legacy permission: now grants reversible addon toggling only.
+    "mods.toggle",
     "backup.create",
     "backup.schedule",
     "backup.view",
+    "backup.restore",
 })
 
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {

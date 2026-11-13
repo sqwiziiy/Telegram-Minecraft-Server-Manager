@@ -15,6 +15,13 @@ from keyboards.inline import (
     auto_tasks_keyboard,
     auto_backup_keyboard,
     back_to_server_keyboard,
+    BACKUP_PAGE_SIZE,
+    addon_token,
+    backup_info_keyboard,
+    backup_list_keyboard,
+    backup_menu_keyboard,
+    backup_result_keyboard,
+    backup_restore_confirm_keyboard,
     confirm_keyboard,
     events_keyboard,
     logs_keyboard,
@@ -25,8 +32,10 @@ from services.access_control import access_control
 from services.auto_stop import auto_stop_manager
 from services.auto_backup import auto_backup_manager
 from services.backup import create_backup
+from services.backup_catalog import backup_info, list_backups
+from services.restore import restore_world
 from services.event_history import event_history
-from services.telegram_context import resolve_server
+from services.telegram_context import resolve_server, safe_edit_text
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -155,26 +164,49 @@ def _backup_interval_text(seconds: int) -> str:
     }.get(seconds, f"{seconds} сек")
 
 
+def _auto_backup_status_line(state: dict) -> str:
+    if not state["enabled"]:
+        return "🚫 Выключен"
+    if state["running"]:
+        started = datetime.fromtimestamp(state["started_at"]).astimezone().strftime("%H:%M:%S")
+        return f"⏳ Создаётся бэкап… (начало в {started})"
+    if state["pending"] and state["last_failed_at"]:
+        retry = state["retry_in_seconds"]
+        return (
+            "❌ Последняя попытка завершилась ошибкой. "
+            + (f"Повтор через {max(1, (retry + 59) // 60)} мин." if retry else "Повторная попытка ожидается.")
+        )
+    if state["pending"]:
+        return "⏳ Срок наступил, ожидает остановки Minecraft."
+    return "🕒 Ожидает следующего срока"
+
+
 def _auto_backup_text(server) -> str:
     state = auto_backup_manager.status(server)
     if not state["enabled"]:
-        summary = "🚫 Выключен"
-    else:
-        due = datetime.fromtimestamp(state["next_due_at"]).astimezone().strftime("%d.%m.%Y %H:%M")
-        summary = (
-            f"✅ Каждые {_backup_interval_text(state['interval_seconds'])}\n"
-            f"📅 Следующий срок: <code>{due}</code> (время сервера)"
+        return (
+            f"💾 <b>Автобэкап · {html.escape(server.server_name)}</b>\n\n"
+            "🚫 Выключен\n\n"
+            "Автоматические копии создаются только при выключенном сервере."
         )
-        if state["pending"]:
-            summary += "\n⏳ Срок наступил. Ожидает полной остановки Minecraft."
+
+    due = datetime.fromtimestamp(state["next_due_at"]).astimezone().strftime("%d.%m.%Y %H:%M")
+    history = ""
+    if state["last_completed_at"]:
+        completed = datetime.fromtimestamp(state["last_completed_at"]).astimezone().strftime("%d.%m.%Y %H:%M")
+        size = (
+            f" · {state['last_size_mb']:.1f} МБ"
+            if state["last_size_mb"] is not None else ""
+        )
+        history = f"\n✅ Последний успешный: <code>{completed}</code>{size}"
 
     return (
         f"💾 <b>Автобэкап · {html.escape(server.server_name)}</b>\n\n"
-        f"{summary}\n\n"
-        "Копирование запускается только при выключенном сервере. "
-        "Если сервер запущен, задача ждёт его остановки. "
-        "Пропущенные интервалы объединяются в один бэкап; "
-        "следующий отсчёт начинается после успешного копирования."
+        f"🔁 Каждые {_backup_interval_text(state['interval_seconds'])}\n"
+        f"📅 Следующий срок: <code>{due}</code> (время сервера)\n"
+        f"{_auto_backup_status_line(state)}{history}\n\n"
+        "Копирование только при выключенном сервере. "
+        "После завершения следующий срок отсчитывается заново."
     )
 
 
@@ -197,11 +229,12 @@ async def auto_tasks_menu(callback: CallbackQuery) -> None:
     backup = auto_backup_manager.status(server)
     stop_label = _duration_text(stop["timeout_seconds"]) if stop["enabled"] else "выкл"
     backup_label = _backup_interval_text(backup["interval_seconds"]) if backup["enabled"] else "выкл"
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"⚙️ <b>Автозадачи · {html.escape(server.server_name)}</b>\n\n"
         f"⏱ Автостоп: <b>{stop_label}</b>\n"
-        f"💾 Автобэкап: <b>{backup_label}</b>"
-        + (" · ⏳ ожидает остановки" if backup["pending"] else ""),
+        f"💾 Автобэкап: <b>{backup_label}</b>\n"
+        f"{_auto_backup_status_line(backup)}",
         parse_mode="HTML",
         reply_markup=auto_tasks_keyboard(server_id, uid),
     )
@@ -220,7 +253,8 @@ async def auto_backup_menu(callback: CallbackQuery) -> None:
         return
 
     state = auto_backup_manager.status(server)
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         _auto_backup_text(server),
         parse_mode="HTML",
         reply_markup=auto_backup_keyboard(server_id, state["interval_seconds"]),
@@ -471,8 +505,48 @@ async def server_logs(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+async def _server_backups(server) -> list[dict]:
+    if server.ssh_remote is not None:
+        return await server.ssh_remote.request("list_backups", timeout=30)
+    return await asyncio.to_thread(list_backups, server.backup_dir)
+
+
+async def _server_backup_details(server, filename: str) -> dict:
+    if server.ssh_remote is not None:
+        return await server.ssh_remote.request("backup_info", filename=filename, timeout=30)
+    return await asyncio.to_thread(backup_info, server.backup_dir, filename)
+
+
+def _can_access_backups(user_id: int, server_id: str) -> bool:
+    return (
+        access_control.can_server(user_id, server_id, "backup.create")
+        or access_control.can_server(user_id, server_id, "backup.view")
+    )
+
+
 @router.callback_query(lambda c: c.data and c.data.startswith("backup:"))
-async def server_backup(callback: CallbackQuery) -> None:
+async def backup_menu(callback: CallbackQuery) -> None:
+    server_id = callback.data.split(":", 1)[1]
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    uid = callback.from_user.id
+    if not _can_access_backups(uid, server_id):
+        await deny_access(callback)
+        return
+    await safe_edit_text(
+        callback.message,
+        f"💾 <b>Бэкапы · {html.escape(server.server_name)}</b>\n\n"
+        "Создайте копию мира или посмотрите сохранённые архивы.",
+        parse_mode="HTML",
+        reply_markup=backup_menu_keyboard(server_id, uid),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("bk_create:"))
+async def create_manual_backup(callback: CallbackQuery) -> None:
     server_id = callback.data.split(":", 1)[1]
     server = resolve_server(server_id)
     if server is None:
@@ -482,7 +556,8 @@ async def server_backup(callback: CallbackQuery) -> None:
         await deny_access(callback)
         return
     await callback.answer()
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"⏳ Создаю бэкап мира · {html.escape(server.server_name)}…",
         parse_mode="HTML",
     )
@@ -491,9 +566,237 @@ async def server_backup(callback: CallbackQuery) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Backup failed for %s", server_id)
         result = f"❌ Ошибка бэкапа: <code>{html.escape(str(exc))}</code>"
-
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         result,
         parse_mode="HTML",
-        reply_markup=back_to_server_keyboard(server_id),
+        reply_markup=backup_result_keyboard(server_id),
+    )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("bk_list:"))
+async def show_backup_list(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit() or len(parts[2]) > 4:
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    _, server_id, raw_page = parts
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "backup.view"):
+        await deny_access(callback)
+        return
+    try:
+        entries = await _server_backups(server)
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"❌ Не удалось получить список: {str(exc)[:110]}", show_alert=True)
+        return
+
+    max_page = max(0, (len(entries) - 1) // BACKUP_PAGE_SIZE)
+    page = min(int(raw_page), max_page)
+    visible = entries[page * BACKUP_PAGE_SIZE:(page + 1) * BACKUP_PAGE_SIZE]
+    summary = (
+        f"📂 <b>Бэкапы · {html.escape(server.server_name)}</b>\n"
+        f"Всего архивов: <b>{len(entries)}</b> · страница {page + 1}/{max_page + 1}\n\n"
+    )
+    if not entries:
+        summary += "Архивов пока нет."
+    else:
+        summary += "Выберите архив для просмотра информации."
+    await safe_edit_text(
+        callback.message,
+        summary,
+        parse_mode="HTML",
+        reply_markup=backup_list_keyboard(server_id, page, visible, len(entries)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("bk_info:"))
+async def show_backup_info(callback: CallbackQuery) -> None:
+    parts = callback.data.split(":")
+    if (
+        len(parts) != 5
+        or not parts[2].isdigit() or len(parts[2]) > 4
+        or not parts[3].isdigit() or len(parts[3]) > 6
+        or len(parts[4]) != 10
+        or any(ch not in "0123456789abcdef" for ch in parts[4])
+    ):
+        await callback.answer("Некорректный архив.", show_alert=True)
+        return
+    _, server_id, raw_page, raw_index, token = parts
+    server = resolve_server(server_id)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return
+    if not access_control.can_server(callback.from_user.id, server_id, "backup.view"):
+        await deny_access(callback)
+        return
+    page, index = int(raw_page), int(raw_index)
+    if index // BACKUP_PAGE_SIZE != page:
+        await callback.answer("Некорректная страница архива.", show_alert=True)
+        return
+    try:
+        entries = await _server_backups(server)
+        if index >= len(entries) or addon_token(entries[index]["name"]) != token:
+            await callback.answer("Список архивов изменился. Обновите его.", show_alert=True)
+            return
+        data = await _server_backup_details(server, entries[index]["name"])
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"❌ Не удалось прочитать архив: {str(exc)[:110]}", show_alert=True)
+        return
+
+    title = (
+        f"📦 <b>Архив · {html.escape(server.server_name)}</b>\n\n"
+        f"🗂 <code>{html.escape(data['name'])}</code>\n"
+        f"📅 {html.escape(data['created'])}\n"
+        f"🏷 {html.escape(data['type'])}\n"
+        f"💾 {data['size_mb']:.1f} МБ\n"
+    )
+    if not data["valid"]:
+        title += "\n⚠️ Не удалось прочитать структуру ZIP. Использовать архив для восстановления нельзя."
+    else:
+        total_mb = data["uncompressed_bytes"] / 1048576
+        title += (
+            f"\n📄 Файлов: {data['file_count']}\n"
+            f"📦 Размер до сжатия: {total_mb:.1f} МБ\n"
+        )
+    await safe_edit_text(
+        callback.message,
+        title,
+        parse_mode="HTML",
+        reply_markup=backup_info_keyboard(
+            server_id, page,
+            selected_index=index,
+            token=token,
+            can_restore=bool(data["valid"] and access_control.can_server(
+                callback.from_user.id, server_id, "backup.restore"
+            )),
+        ),
+    )
+    await callback.answer()
+
+def _parse_restore_callback(data: str, prefix: str):
+    if not isinstance(data, str) or not data.startswith(prefix):
+        return None
+    parts = data[len(prefix):].split(":")
+    if (
+        len(parts) != 4 or not parts[0]
+        or not parts[1].isdigit() or len(parts[1]) > 4
+        or not parts[2].isdigit() or len(parts[2]) > 6
+        or len(parts[3]) != 10 or any(ch not in "0123456789abcdef" for ch in parts[3])
+    ):
+        return None
+    sid, p, i, fingerprint = parts
+    page, index = int(p), int(i)
+    if index // BACKUP_PAGE_SIZE != page:
+        return None
+    return sid, page, index, fingerprint
+
+
+async def _resolve_restore_selection(callback, prefix: str):
+    parsed = _parse_restore_callback(callback.data, prefix)
+    if parsed is None:
+        await callback.answer("Некорректный выбор архива.", show_alert=True)
+        return None
+    sid, page, index, token = parsed
+    server = resolve_server(sid)
+    if server is None:
+        await callback.answer("❌ Сервер больше не настроен.", show_alert=True)
+        return None
+    if not access_control.can_server(callback.from_user.id, sid, "backup.restore"):
+        await deny_access(callback)
+        return None
+    try:
+        entries = await _server_backups(server)
+        if index >= len(entries) or addon_token(entries[index]["name"]) != token:
+            await callback.answer("Список архивов изменился. Откройте его заново.", show_alert=True)
+            return None
+        filename = entries[index]["name"]
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"❌ Не удалось получить архив: {str(exc)[:110]}", show_alert=True)
+        return None
+    return server, page, index, token, filename
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("br:"))
+async def ask_restore_world(callback: CallbackQuery) -> None:
+    selection = await _resolve_restore_selection(callback, "br:")
+    if selection is None:
+        return
+    server, page, index, token, filename = selection
+    try:
+        if (await server.manager.status()).running:
+            await callback.answer("⏹ Для восстановления сначала остановите Minecraft.", show_alert=True)
+            return
+        details = await _server_backup_details(server, filename)
+        if not details["valid"]:
+            await callback.answer("❌ Структура ZIP повреждена.", show_alert=True)
+            return
+    except Exception as exc:  # noqa: BLE001
+        await callback.answer(f"❌ Не удалось проверить сервер: {str(exc)[:105]}", show_alert=True)
+        return
+    await safe_edit_text(
+        callback.message,
+        f"⚠️ <b>Восстановить мир · {html.escape(server.server_name)}?</b>\n\n"
+        f"📦 <code>{html.escape(filename)}</code>\n\n"
+        "Текущий мир будет заменён. Перед заменой автоматически создаётся "
+        "отдельная защитная копия. Сервер должен быть выключен.\n\n"
+        "Для продолжения подтвердите действие.",
+        parse_mode="HTML",
+        reply_markup=backup_restore_confirm_keyboard(server.server_id, page, index, token),
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("br_ok:"))
+async def execute_restore_world(callback: CallbackQuery) -> None:
+    selection = await _resolve_restore_selection(callback, "br_ok:")
+    if selection is None:
+        return
+    server, page, index, token, filename = selection
+    await callback.answer()
+    await safe_edit_text(
+        callback.message,
+        f"⏳ <b>Восстанавливаю мир · {html.escape(server.server_name)}</b>\n"
+        "Проверяю ZIP и создаю защитную копию текущего мира…",
+        parse_mode="HTML",
+    )
+    try:
+        ran, outcome = await restore_world(server, filename)
+        if not ran:
+            result = "⏹ Сервер запущен. Восстановление отменено; мир не изменён."
+        elif outcome is None:
+            raise RuntimeError("No restoration result received")
+        else:
+            try:
+                await event_history.record(
+                    server, kind="world_restore",
+                    text=f"Мир восстановлен из {filename}; защитная копия: {outcome['protected']}; "
+                    f"Telegram · {_telegram_actor(callback.from_user)}",
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Could not record successful world restore event")
+            result = (
+                "✅ <b>Мир восстановлен!</b>\n\n"
+                f"📦 Из: <code>{html.escape(outcome['restored'])}</code>\n"
+                f"🛡 Защитный бэкап: <code>{html.escape(outcome['protected'])}</code>\n"
+                "▶️ Теперь можно запускать Minecraft."
+            )
+            if outcome.get("warning"):
+                result += f"\n⚠️ {html.escape(outcome['warning'])}"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Restore failed for %s", server.server_id)
+        result = (
+            "❌ <b>Восстановление не завершено.</b>\n"
+            f"<code>{html.escape(str(exc)[:500])}</code>\n"
+            "Проверьте состояние сервера и его мир перед запуском."
+        )
+    await safe_edit_text(
+        callback.message,
+        result,
+        parse_mode="HTML",
+        reply_markup=backup_result_keyboard(server.server_id),
     )

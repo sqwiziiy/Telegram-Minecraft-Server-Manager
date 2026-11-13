@@ -34,9 +34,11 @@ PERMISSIONS: tuple[tuple[str, str], ...] = (
     ("console.use", "RCON-консоль"),
     ("mods.view", "Просмотр модов"),
     ("mods.upload", "Загрузка модов"),
-    ("mods.delete", "Удаление модов"),
+    ("mods.delete", "Переключение модов (старое право)"),
+    ("mods.toggle", "Включение/отключение модов"),
     ("backup.create", "Ручной бэкап"),
     ("backup.view", "Просмотр бэкапов"),
+    ("backup.restore", "Восстановление мира (опасное действие)"),
     ("backup.schedule", "Расписание автобэкапа"),
 )
 PERMISSION_IDS = frozenset(key for key, _ in PERMISSIONS)

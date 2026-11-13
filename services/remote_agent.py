@@ -6,6 +6,8 @@ NOT a network daemon and never listens on an HTTP port.
 """
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
 import os
 import fcntl
@@ -13,19 +15,26 @@ import secrets
 from contextlib import contextmanager
 import re
 import shlex
+import shutil
 import signal
+import stat
 import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
 _AUTO_RE = re.compile(r"^world_auto_backup_\d{8}_\d{6}_\d{6}\.zip$")
+_CATALOG_RE = re.compile(
+    r"^world_(?P<kind>auto_backup|backup|pre_restore)_(?P<stamp>\d{8}_\d{6}_\d{6})\.zip$"
+)
 _PARTIAL_RE = re.compile(r"^\.world_(?:auto_)?backup_\d{8}_\d{6}_\d{6}\.zip\.partial$")
 _MOD_RE = re.compile(r"^[A-Za-z0-9_\-. +\[\]()@#]+\.jar$")
+_ADDON_RE = re.compile(r"^[A-Za-z0-9_\-. +\[\]()@#]+\.jar(?:\.disabled)?$")
 
 
 def path(value):
@@ -283,7 +292,10 @@ def list_mods(config):
     folder = path(config["mods_dir"])
     if not folder.is_dir():
         return None
-    return sorted(p.name for p in folder.iterdir() if p.is_file() and not p.is_symlink() and p.suffix.lower() == ".jar")
+    return sorted(
+        p.name for p in folder.iterdir()
+        if p.is_file() and not p.is_symlink() and _ADDON_RE.fullmatch(p.name)
+    )
 
 
 def mod_path(config, filename):
@@ -296,12 +308,43 @@ def mod_path(config, filename):
     return folder, dest
 
 
-def remove_mod(config, filename):
-    _, dest = mod_path(config, filename)
-    if not dest.exists():
-        return False
-    dest.unlink()
-    return True
+def toggle_mod(config, filename):
+    if not _ADDON_RE.fullmatch(filename):
+        raise ValueError("Invalid addon filename")
+    if get_status(config)["running"]:
+        raise RuntimeError("Minecraft must be stopped before toggling addons")
+    folder = path(config["mods_dir"]).resolve(strict=True)
+    source = folder / filename
+    destination_name = (
+        filename.removesuffix(".disabled")
+        if filename.endswith(".jar.disabled") else filename + ".disabled"
+    )
+    target = folder / destination_name
+    info = source.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("Addon must be a regular file")
+    if os.path.lexists(target):
+        raise FileExistsError(f"Target already exists: {destination_name}")
+    os.link(source, target, follow_symlinks=False)
+    try:
+        linked = target.lstat()
+        current = source.lstat()
+        if (
+            not stat.S_ISREG(linked.st_mode)
+            or linked.st_ino != info.st_ino or linked.st_dev != info.st_dev
+            or current.st_ino != info.st_ino or current.st_dev != info.st_dev
+        ):
+            raise RuntimeError("Addon changed while toggling; refusing to remove source")
+        source.unlink()
+    except BaseException:
+        try:
+            linked_now = target.lstat()
+            if linked_now.st_ino == info.st_ino and linked_now.st_dev == info.st_dev:
+                target.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return destination_name
 
 
 def commit_mod(config, filename, temporary_name):
@@ -398,6 +441,284 @@ def make_backup(config, automatic):
             result = rcon(config, "save-on")
             if result.startswith("❌"):
                 print("WARNING: Minecraft saves could not be re-enabled", file=sys.stderr)
+
+
+def safe_zip_filename(filename):
+    return (
+        isinstance(filename, str)
+        and filename.lower().endswith(".zip")
+        and not filename.startswith(".")
+        and len(filename.encode("utf-8")) <= 255
+        and not any(char in filename for char in ("/", "\\", "\x00", "\n", "\r"))
+        and all(ord(char) >= 32 for char in filename)
+    )
+
+
+def archive_metadata(entry):
+    if not safe_zip_filename(entry.name) or entry.is_symlink() or not entry.is_file():
+        return None
+    try:
+        info = entry.stat()
+        match = _CATALOG_RE.fullmatch(entry.name)
+        if match:
+            stamp = datetime.strptime(match.group("stamp"), "%Y%m%d_%H%M%S_%f")
+            labels = {"backup": "Ручной", "auto_backup": "Автоматический", "pre_restore": "Защитный"}
+            archive_type = labels[match.group("kind")]
+            known_format = True
+        else:
+            stamp = datetime.fromtimestamp(info.st_mtime)
+            lower = entry.name.lower()
+            if lower.startswith("world_auto_backup_"):
+                archive_type = "Автоматический (старый формат)"
+            elif lower.startswith("world_pre_restore_"):
+                archive_type = "Защитный (старый формат)"
+            elif lower.startswith("world_backup_"):
+                archive_type = "Ручной (старый формат)"
+            else:
+                archive_type = "Другой ZIP (требует проверки)"
+            known_format = False
+    except (OSError, ValueError, OverflowError):
+        return None
+    return {
+        "name": entry.name,
+        "type": archive_type,
+        "known_format": known_format,
+        "created": stamp.strftime("%d.%m.%Y %H:%M:%S"),
+        "timestamp": stamp.strftime("%Y%m%d_%H%M%S_%f"),
+        "size_bytes": info.st_size,
+        "size_mb": round(info.st_size / 1048576, 1),
+    }
+
+
+def list_backups(config):
+    directory = path(config["backup_dir"])
+    if not directory.is_dir():
+        return []
+    records = [archive_metadata(f) for f in directory.iterdir()]
+    return sorted((x for x in records if x is not None),
+                  key=lambda x: (x["timestamp"], x["name"]), reverse=True)
+
+
+def backup_info(config, filename):
+    if not safe_zip_filename(filename):
+        raise ValueError("Invalid backup filename")
+    entry = path(config["backup_dir"]) / filename
+    meta = archive_metadata(entry)
+    if meta is None:
+        raise FileNotFoundError("Backup not found or unsafe")
+    try:
+        fd = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise OSError("Backup is not a regular file")
+            with zipfile.ZipFile(handle, "r") as archive:
+                info = archive.infolist()
+                meta["file_count"] = sum(not x.is_dir() for x in info)
+                meta["uncompressed_bytes"] = sum(x.file_size for x in info if not x.is_dir())
+                meta["preview"] = [x.filename[:180] for x in info if not x.is_dir()][:12]
+                meta["valid"] = True
+    except (zipfile.BadZipFile, OSError, ValueError):
+        meta.update(valid=False, file_count=None, uncompressed_bytes=None, preview=[])
+    return meta
+
+
+# This core is stdlib-only and shared by the SSH agent and local bot. Keeping
+# it here means the agent can run on remote hosts without installing packages.
+_MAX_RESTORE_FILES = 500_000
+_MAX_RESTORE_BYTES = 512 * 1024**3
+_MIN_FREE_RESERVE = 64 * 1024**2
+
+
+def _restore_manifest(zipped, root_name):
+    members = []
+    seen = set()
+    total = 0
+    level_data_found = False
+    if len(zipped.infolist()) > _MAX_RESTORE_FILES:
+        raise ValueError("Too many ZIP entries")
+    for entry in zipped.infolist():
+        name = entry.filename
+        if (
+            not name or "\\" in name or "\x00" in name
+            or name.startswith("/") or any(ord(ch) < 32 for ch in name)
+        ):
+            raise ValueError("Unsafe filename in ZIP")
+        parts = name.rstrip("/").split("/")
+        if any(p in ("", ".", "..") for p in parts):
+            raise ValueError("ZIP contains an unsafe path")
+        if parts[0] != root_name or len(parts) < 2:
+            # An optional root directory entry is normal.
+            if not (parts == [root_name] and entry.is_dir()):
+                raise ValueError("ZIP does not contain the configured Minecraft world")
+            continue
+        subpath = tuple(parts[1:])
+        if subpath in seen:
+            raise ValueError("Duplicate filename in ZIP")
+        seen.add(subpath)
+        unix_type = stat.S_IFMT(entry.external_attr >> 16)
+        if unix_type not in (0, stat.S_IFREG, stat.S_IFDIR):
+            raise ValueError("ZIP contains symlinks or special files")
+        if entry.is_dir() and unix_type == stat.S_IFREG:
+            raise ValueError("Inconsistent ZIP directory type")
+        if not entry.is_dir() and unix_type == stat.S_IFDIR:
+            raise ValueError("Inconsistent ZIP file type")
+        if not entry.is_dir():
+            total += entry.file_size
+            if total > _MAX_RESTORE_BYTES:
+                raise ValueError("World in ZIP exceeds maximum allowed size")
+            if subpath == ("level.dat",) and entry.file_size > 0:
+                level_data_found = True
+        members.append((entry, subpath))
+    if not level_data_found:
+        raise ValueError("ZIP does not contain a nonempty world/level.dat")
+    return members, total
+
+
+def _world_tree_bytes(world):
+    total = 0
+    for root, dirs, files in os.walk(world, followlinks=False):
+        for name in dirs + files:
+            item = Path(root) / name
+            metadata = item.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ValueError("World contains a symlink; refusing unsafe protection backup")
+            if name in files:
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError("World contains a special file")
+                total += metadata.st_size
+    return total
+
+
+def _fsync_directory(directory):
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _exchange_directories(left, right):
+    """Linux atomic rename exchange: power loss cannot leave world missing."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    fn = getattr(libc, "renameat2", None)
+    if fn is None:
+        raise RuntimeError("Filesystem does not support safe atomic world exchange")
+    result = fn(
+        ctypes.c_int(-100), ctypes.c_char_p(os.fsencode(left)),
+        ctypes.c_int(-100), ctypes.c_char_p(os.fsencode(right)),
+        ctypes.c_uint(2),  # RENAME_EXCHANGE
+    )
+    if result != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
+
+
+def _protect_old_world(world, backups):
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    archive = backups / ("world_pre_restore_" + stamp + ".zip")
+    partial = backups / ("." + archive.name + "." + secrets.token_hex(8) + ".partial")
+    try:
+        with zipfile.ZipFile(partial, "x", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as output:
+            for root, dirs, files in os.walk(world, followlinks=False):
+                for name in dirs:
+                    folder = Path(root) / name
+                    if folder.is_symlink():
+                        raise ValueError("Symlink appeared while backing up existing world")
+                    output.write(folder, arcname=str(folder.relative_to(world.parent)) + "/")
+                for name in files:
+                    candidate = Path(root) / name
+                    if candidate.is_symlink() or not candidate.is_file():
+                        raise ValueError("Special file appeared while backing up world")
+                    output.write(candidate, arcname=str(candidate.relative_to(world.parent)))
+        # Verify the protective archive completely before touching world directory.
+        with zipfile.ZipFile(partial, "r") as check:
+            if check.testzip() is not None:
+                raise ValueError("Protective archive integrity check failed")
+        with partial.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.link(partial, archive, follow_symlinks=False)  # no overwrite
+        _fsync_directory(backups)
+        return archive
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def restore_world_files(config, filename):
+    """Offline-only caller must hold the process/operation lock throughout.
+
+    Stages a fully CRC-verified ZIP in the same filesystem, writes a separately
+    verified pre-restore ZIP, then exchanges directories in one Linux syscall.
+    A crash can leave a leftover stage folder but never an absent world.
+    """
+    if not safe_zip_filename(filename):
+        raise ValueError("Invalid archive filename")
+    world = path(config["world_dir"])
+    if world.is_symlink() or not world.is_dir() or not world.name or world.name in (".", ".."):
+        raise ValueError("Existing Minecraft world must be a real directory")
+    world_parent = world.parent.resolve(strict=True)
+    if world.resolve(strict=True).parent != world_parent:
+        raise ValueError("Invalid world directory")
+    backups = path(config["backup_dir"]).resolve(strict=True)
+    if backups == world or world in backups.parents or backups in world.parents:
+        raise ValueError("Backups directory must be separate from the Minecraft world")
+    source = backups / filename
+    if source.is_symlink() or not source.is_file():
+        raise FileNotFoundError("Backup archive missing or is a symbolic link")
+
+    swapped = False
+    stage = None
+    protected = None
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as source_stream:
+            if not stat.S_ISREG(os.fstat(source_stream.fileno()).st_mode):
+                raise ValueError("Backup is not a regular file")
+            with zipfile.ZipFile(source_stream, "r") as archived:
+                members, uncompressed_bytes = _restore_manifest(archived, world.name)
+                current_bytes = _world_tree_bytes(world)
+                # Reserve space for extracted world + worst-case protective archive.
+                required = uncompressed_bytes + int(current_bytes * 1.05) + _MIN_FREE_RESERVE
+                if shutil.disk_usage(world_parent).free < required:
+                    raise OSError(errno.ENOSPC, "Insufficient free space for safe restore and protection backup")
+                stage = Path(tempfile.mkdtemp(prefix=f".{world.name}.restore-", dir=world_parent))
+                staged_world = stage / world.name
+                staged_world.mkdir()
+                for info, relative in members:
+                    target = staged_world.joinpath(*relative)
+                    if info.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with archived.open(info, "r") as src, target.open("xb") as dest:
+                            shutil.copyfileobj(src, dest, length=1024 * 1024)
+                            dest.flush()
+                            os.fsync(dest.fileno())
+                # No world modification has happened; archive.open checked CRCs.
+        os.chmod(staged_world, world.stat().st_mode & 0o777)
+        _fsync_directory(staged_world)
+        _fsync_directory(stage)
+        protected = _protect_old_world(world, backups)
+        if world.is_symlink() or not world.is_dir():
+            raise RuntimeError("World changed during staging; restore aborted")
+        _exchange_directories(world, staged_world)
+        swapped = True
+        warning = ""
+        try:
+            _fsync_directory(world_parent)
+        except OSError as exc:
+            warning = f"World swapped, but directory fsync failed: {exc}"
+        try:
+            shutil.rmtree(stage)
+        except OSError:
+            warning += f" Old world remains in staging folder: {stage}"
+        return {
+            "restored": filename,
+            "protected": protected.name,
+            "warning": warning,
+        }
+    finally:
+        if stage is not None and not swapped:
+            shutil.rmtree(stage, ignore_errors=True)
 
 
 def properties(config):
@@ -528,7 +849,7 @@ def dispatch(request):
         return configure_properties(expected_config, request["content"])
     if action == "status":
         return get_status(config)
-    if action in ("start", "stop", "restart", "backup"):
+    if action in ("start", "stop", "restart", "backup", "toggle_mod", "restore_world"):
         # Lock on the remote filesystem rather than in a single bot process.
         # The lock also protects long offline backups from concurrent starts.
         with operation_lock(config):
@@ -541,6 +862,12 @@ def dispatch(request):
                 if get_status(config)["running"]:
                     raise RuntimeError("Minecraft is still running; refusing a second start")
                 return launch(config)
+            if action == "toggle_mod":
+                return toggle_mod(config, request["filename"])
+            if action == "restore_world":
+                if get_status(config)["running"]:
+                    raise RuntimeError("Minecraft must be stopped to restore a world")
+                return restore_world_files(config, request["filename"])
             return make_backup(config, bool(request.get("automatic", False)))
     if action == "rcon":
         status = get_status(config)
@@ -549,10 +876,14 @@ def dispatch(request):
         return rcon(config, request["command"])
     if action == "tail_output":
         return tail_file(config, request.get("lines", 30), "output_log")
+    if action == "list_backups":
+        return list_backups(config)
+    if action == "backup_info":
+        return backup_info(config, request["filename"])
     if action == "list_mods":
         return list_mods(config)
     if action == "delete_mod":
-        return remove_mod(config, request["filename"])
+        raise ValueError("Permanent addon deletion is disabled; use toggle_mod")
     if action == "commit_mod":
         return commit_mod(config, request["filename"], request["temporary_name"])
     if action == "list_files":
