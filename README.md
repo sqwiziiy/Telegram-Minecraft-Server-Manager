@@ -6,6 +6,14 @@ Control all configured Linux Minecraft servers from one Telegram bot: start/stop
 
 [Русская версия](README_RU.md)
 
+## What's new in v3.0.0
+
+The **Server Management & Recovery Update** adds backup progress/details, safe mod/plugin enable-disable toggles, a paginated ZIP backup browser, and offline-only world restoration with ZIP validation, a pre-restore safety backup and two-step confirmation. Local and SSH Minecraft servers are supported.
+
+These features were already merged in [PR #14](https://github.com/sqwiziiy/Telegram-Minecraft-Server-Manager/pull/14). No new Python application code is needed for the release. The planned dynamic state-based button overhaul is **not** part of v3.0.0.
+
+See [release notes](RELEASE_NOTES_v3.0.0.md) and [changelog](CHANGELOG.md). Running Minecraft does not require systemd; the provided systemd unit is optional supervision for the Telegram bot.
+
 ## Why this project
 
 This is a small self-hosted control panel for private Minecraft servers. The bot runs separately from Minecraft and starts each server process directly from its configured command.
