@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [v3.0.0] - 2026-11-13
+
+**Server Management & Recovery Update.** Includes the already integrated changes from PR #14 (55 commits).
+
+### Added
+- Auto-backup panel status: waiting for a stopped server, creating an archive, failure/retry, and last successful backup time and size.
+- Safe enable/disable for installed mods or plugins using `.jar` ↔ `.jar.disabled`, for both local and SSH servers, without deleting files.
+- Paginated backup catalog (six archives per page) with archive type, date, size, file count and ZIP contents preview without extraction.
+- Offline-only world restore from an existing ZIP, with a dedicated `backup.restore` permission and two-step Telegram confirmation, for local and SSH servers.
+- Pre-restore ZIP safety copy (`world_pre_restore_*.zip`), archive integrity/path checks, free-space checks and an atomic Linux directory swap with rollback behavior on failure.
+- Additional automated tests covering backups, mod toggling and world-restore safety cases.
+
+### Notes
+- The maintainer reported completing manual verification. CI completed successfully after the v3 feature merge.
+- This release does not claim the planned dynamic running/stopped/SSH-unavailable UI overhaul; it is deferred to a future update.
+- Minecraft is managed directly through the bot's process controller or SSH. systemd is **not** required for the Minecraft server; the repo's systemd unit is an optional way to run the Telegram bot itself.
+- No new Python application code is introduced by the release packaging.
+
 ## [v2.0.1] - 2026-10-09
 
 ### Added
