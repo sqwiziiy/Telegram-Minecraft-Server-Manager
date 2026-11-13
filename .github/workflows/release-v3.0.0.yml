@@ -1,0 +1,52 @@
+name: Publish v3.0.0
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["main"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-v3.0.0
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout verified source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Publish v3.0.0 from a successful main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if gh release view v3.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v3.0.0 already published"
+            exit 0
+          fi
+          LATEST_SHA="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$TARGET_SHA" != "$LATEST_SHA" ]]; then
+            echo "Ignoring older CI run ($TARGET_SHA); current main is $LATEST_SHA"
+            exit 0
+          fi
+          test -s RELEASE_NOTES_v3.0.0.md
+          grep -q '^## \[v3.0.0\]' CHANGELOG.md
+          gh release create v3.0.0 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET_SHA" \
+            --title "v3.0.0 — Server Management & Recovery Update" \
+            --notes-file RELEASE_NOTES_v3.0.0.md \
+            --latest
